@@ -606,6 +606,10 @@ erts_alloc_init(int *argc, char **argv, ErtsAllocInitOpts *eaiop)
     erts_set_fix_size(ERTS_ALC_T_REG_PROC,	sizeof(RegProc));
     erts_set_fix_size(ERTS_ALC_T_MONITOR_SH,	ERTS_MONITOR_SH_SIZE*sizeof(Uint));
     erts_set_fix_size(ERTS_ALC_T_NLINK_SH,	ERTS_LINK_SH_SIZE*sizeof(Uint));
+#ifdef LIMITS
+    erts_set_fix_size(ERTS_ALC_T_LIMITS,        sizeof(ErtsLimits));
+    erts_set_fix_size(ERTS_ALC_T_LIMIT,         sizeof(ErtsLimit));
+#endif
     erts_set_fix_size(ERTS_ALC_T_FUN_ENTRY,	sizeof(ErlFunEntry));
 #ifdef ERTS_ALC_T_DRV_EV_D_STATE
     erts_set_fix_size(ERTS_ALC_T_DRV_EV_D_STATE,

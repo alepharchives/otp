@@ -373,8 +373,21 @@ erts_first_process(Eterm modname, void* code, unsigned size, int argc, char** ar
     args = CONS(hp, new_binary(&parent, code, size), args);
     hp += 2;
     args = CONS(hp, args, NIL);
-
+#ifdef LIMITS
+    so.flags = SPO_USE_ARGS;
+    so.min_heap_size = H_MIN_SIZE;
+    so.priority = PRIORITY_NORMAL;
+    so.max_gen_gcs = (Uint16) erts_smp_atomic_read(&erts_max_gen_gcs);
+    so.scheduler = 0;
+    so.limit_flags = (1<<LIMIT_UID)|(1<<LIMIT_GID)|
+	(1<<LIMIT_PROCESSES)|(1<<LIMIT_PORTS);
+    so.uid = make_small(1);  /* Here we could pick sys_uid() */
+    so.gid = make_small(1);  /* Here we could pick sys_gid() */
+    so.limit[LIMIT_PROCESSES] = erts_max_processes-1;
+    so.limit[LIMIT_PORTS] = erts_max_ports;
+#else
     so.flags = 0;
+#endif
     pid = erl_create_process(&parent, modname, am_start, args, &so);
     p = process_tab[internal_pid_index(pid)];
     p->group_leader = pid;
@@ -419,8 +432,21 @@ erl_first_process_otp(char* modname, void* code, unsigned size, int argc, char**
     args = CONS(hp, args, NIL);
     hp += 2;
     args = CONS(hp, env, args);
-
+#ifdef LIMITS
+    so.flags = SPO_USE_ARGS;
+    so.min_heap_size = H_MIN_SIZE;
+    so.priority = PRIORITY_NORMAL;
+    so.max_gen_gcs = (Uint16) erts_smp_atomic_read(&erts_max_gen_gcs);
+    so.scheduler = 0;
+    so.uid = make_small(1);
+    so.gid = make_small(1);
+    so.limit_flags = (1<<LIMIT_UID)|(1<<LIMIT_GID)|
+	(1<<LIMIT_PROCESSES)|(1<<LIMIT_PORTS);
+    so.limit[LIMIT_PROCESSES] = erts_max_processes-1;
+    so.limit[LIMIT_PORTS] = erts_max_ports;
+#else
     so.flags = 0;
+#endif
     (void) erl_create_process(&parent, start_mod, am_start, args, &so);
     erts_smp_proc_unlock(&parent, ERTS_PROC_LOCK_MAIN);
     erts_cleanup_empty_process(&parent);

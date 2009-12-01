@@ -1199,6 +1199,10 @@ BIF_RETTYPE ets_new_2(BIF_ALIST_2)
     if (is_not_nil(BIF_ARG_2) && is_not_list(BIF_ARG_2)) {
 	BIF_ERROR(BIF_P, BADARG);
     }
+#ifdef LIMITS
+    if (erts_update_limit(BIF_P->limits, LIMIT_TABLES, 1))
+	BIF_ERROR(BIF_P, SYSTEM_LIMIT);
+#endif
 
     status = DB_NORMAL | DB_SET | DB_PROTECTED;
     keypos = 1;
@@ -3373,6 +3377,9 @@ static int free_table_cont(Process *p,
 #ifdef HARDDEBUG
 	erts_fprintf(stderr,"ets: free_table_cont %T (continue end)\r\n",
 		     tb->common.id);
+#endif
+#ifdef LIMITS
+	erts_update_limit(p->limits, LIMIT_TABLES, -1);
 #endif
 	/* Completely done - we will not get called again. */
 	meta_main_tab_lock(tb->common.slot);

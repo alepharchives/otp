@@ -450,6 +450,62 @@ struct ErtsPendingSuspend_ {
 
 #endif
 
+#ifdef LIMITS
+
+#define LIMIT_PROCESSES  0
+#define LIMIT_PORTS      1
+#define LIMIT_TABLES     2
+#define LIMIT_CPU        3   // max cpu milliseconds (accumulated)
+#define LIMIT_TIME       4   // milliseconds from start stamp
+#define LIMIT_REDUCTIONS 5
+#define LIMIT_MEMORY     6
+#define LIMIT_MQLEN      7
+#define NLIMITS          8
+#define LIMIT_UID        15 /* spawn opt flag number */
+#define LIMIT_GID        16 /* spawn opt flag number */
+
+typedef struct _ErtsLimit {
+    Uint32             kind;    // kind of resource (from ErtsLimits)
+    struct _ErtsLimit* creator;
+    erts_refc_t        refc;
+    Uint32             max;    // LIMIT_x where value => max */
+    erts_smp_atomic_t  value;
+} ErtsLimit;
+
+typedef struct _ErtsLimits {
+    erts_refc_t refc;
+    SysTimeval  time;          // Time when limits where created
+    Eterm       uid;
+    Eterm       gid;
+    ErtsLimit*  kind[NLIMITS];
+} ErtsLimits;
+
+Uint32 erts_diff_timeval_ms(SysTimeval* t1, SysTimeval* t0);
+void erts_add_timeval_ms(SysTimeval* t1, Uint32 ms, SysTimeval* t0);
+int erts_isset_timeval(SysTimeval* t);
+
+ErtsLimit* erts_ref_limit(ErtsLimit* limit);
+void erts_unref_limit(ErtsLimit* limit);
+ErtsLimit* erts_new_limit(Uint32 kind, Uint32 max, Uint32 ivalue);
+ErtsLimits* erts_ref_limits(ErtsLimits* limits);
+void erts_unref_limits(ErtsLimits* limits);
+void erts_set_limit(ErtsLimits* limits, int k, ErtsLimit* limit);
+ErtsLimits* erts_new_limits(ErtsLimits* creator);
+int erts_update_limit(ErtsLimits* limits, int k, long incr);
+int erts_have_limit(ErtsLimits* limits, int k);
+
+int erts_update_time_limit(ErtsLimits* limits);
+int erts_check_time_limits(Process*p, int schedule_in);
+
+
+Eterm erts_limits_get_uid(ErtsLimits* limits);
+Eterm erts_limits_get_gid(ErtsLimits* limits);
+
+void erts_limits_set_uid(ErtsLimits* limits, Eterm uid);
+void erts_limits_set_gid(ErtsLimits* limits, Eterm gid);
+
+#endif
+
 /* Defines to ease the change of memory architecture */
 #  define HEAP_START(p)     (p)->heap
 #  define HEAP_TOP(p)       (p)->htop
@@ -642,6 +698,12 @@ struct process {
     ErlHeapFragment* last_mbuf;	/* No need to scan beyond this mbuf. */
 #endif
 
+#ifdef LIMITS
+    SysTimeval  in_time;	/* Time when scheduled in (LIMIT_CPU) */
+    ErtsLimits* limits;         /* Process limits 0=no limit */
+#endif
+
+
 #ifdef DEBUG
     Eterm* last_old_htop;	/*
 				 * No need to scan the old heap below this point
@@ -725,6 +787,13 @@ typedef struct {
     int priority;		/* Priority for process. */
     Uint16 max_gen_gcs;		/* Maximum number of gen GCs before fullsweep. */
     int scheduler;
+#ifdef LIMITS
+    Uint32     limit_flags;
+    Eterm      uid;
+    Eterm      gid;
+    SysTimeval time;
+    long       limit[NLIMITS];
+#endif
 } ErlSpawnOpts;
 
 /*

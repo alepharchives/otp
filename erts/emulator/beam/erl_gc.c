@@ -346,6 +346,9 @@ erts_garbage_collect(Process* p, int need, Eterm* objv, int nobj)
     Uint reclaimed_now = 0;
     int done = 0;
     Uint ms1, s1, us1;
+#ifdef LIMITS
+    Uint size_before = 0;
+#endif
 
     if (IS_TRACED_FL(p, F_TRACE_GC)) {
         trace_gc(p, am_gc_start);
@@ -367,6 +370,13 @@ erts_garbage_collect(Process* p, int need, Eterm* objv, int nobj)
     if (GEN_GCS(p) >= MAX_GEN_GCS(p)) {
         FLAGS(p) |= F_NEED_FULLSWEEP;
     }
+#ifdef LIMITS
+    if (p->limits && erts_have_limit(p->limits, LIMIT_MEMORY)) {
+	// the total heap size before garb
+	size_before = HEAP_SIZE(p);
+	size_before += OLD_HEAP(p) ? OLD_HEND(p) - OLD_HEAP(p) : 0;
+    }
+#endif
 
     /*
      * Test which type of GC to do.
@@ -409,6 +419,7 @@ erts_garbage_collect(Process* p, int need, Eterm* objv, int nobj)
 	    monitor_long_gc(p, t);
 	}
     }
+
     if (erts_system_monitor_large_heap != 0) {
 	Uint size = HEAP_SIZE(p);
 	size += OLD_HEAP(p) ? OLD_HEND(p) - OLD_HEAP(p) : 0;
@@ -443,6 +454,15 @@ erts_garbage_collect(Process* p, int need, Eterm* objv, int nobj)
     p->last_old_htop = p->old_htop;
 #endif
 
+#ifdef LIMITS
+    if (size_before) {
+	long size_diff = HEAP_SIZE(p);
+	size_diff += OLD_HEAP(p) ? (OLD_HEND(p) - OLD_HEAP(p)) : 0;
+	size_diff -= size_before;
+	if (erts_update_limit(p->limits, LIMIT_MEMORY, size_diff))
+	    return -1;
+    }
+#endif
     return ((int) (HEAP_TOP(p) - HEAP_START(p)) / 10);
 }
 

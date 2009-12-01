@@ -182,6 +182,9 @@ struct port {
     ErlDrvPDL port_data_lock;
 
     ErtsPrtSD *psd;		 /* Port specific data */
+#ifdef LIMITS
+    ErtsLimits* limits;          /* Limits inherited from creator */
+#endif
 };
 
 

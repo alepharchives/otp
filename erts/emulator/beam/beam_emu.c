@@ -348,15 +348,17 @@ extern int count_instructions;
 #define AH(StackNeed, HeapNeed, M) \
   do { \
      int needed; \
+     int fc; \
      needed = (StackNeed) + 1; \
      if (E - HTOP < (needed + (HeapNeed))) { \
            SWAPOUT; \
            reg[0] = r(0); \
            PROCESS_MAIN_CHK_LOCKS(c_p); \
-           FCALLS -= erts_garbage_collect(c_p, needed + (HeapNeed), reg, (M)); \
-           PROCESS_MAIN_CHK_LOCKS(c_p); \
-           r(0) = reg[0]; \
-           SWAPIN; \
+	   if ((fc = erts_garbage_collect(c_p, needed + (HeapNeed), reg, (M))) < 0) goto sys_limit; \
+           FCALLS -= fc;						\
+           PROCESS_MAIN_CHK_LOCKS(c_p);					\
+           r(0) = reg[0];						\
+           SWAPIN;							\
      } \
      E -= needed; \
      SAVE_CP(E); \
@@ -423,11 +425,14 @@ extern int count_instructions;
 #define TestHeap(Nh, Live)                                      \
   do {                                                          \
     unsigned need = (Nh);                                       \
+    int fc;							\
     if (E - HTOP < need) {                                      \
        SWAPOUT;                                                 \
        reg[0] = r(0);                                           \
        PROCESS_MAIN_CHK_LOCKS(c_p);                             \
-       FCALLS -= erts_garbage_collect(c_p, need, reg, (Live));  \
+       if ((fc = erts_garbage_collect(c_p, need, reg, (Live))) < 0) \
+	   goto sys_limit; \
+       FCALLS -= fc; \
        PROCESS_MAIN_CHK_LOCKS(c_p);                             \
        r(0) = reg[0];                                           \
        SWAPIN;                                                  \
@@ -443,12 +448,15 @@ extern int count_instructions;
 #define TestHeapPreserve(Nh, Live, Extra)				\
   do {									\
     unsigned need = (Nh);						\
+    int fc;								\
     if (E - HTOP < need) {						\
        SWAPOUT;								\
        reg[0] = r(0);							\
        reg[Live] = Extra;						\
        PROCESS_MAIN_CHK_LOCKS(c_p);					\
-       FCALLS -= erts_garbage_collect(c_p, need, reg, (Live)+1);	\
+       if ((fc = erts_garbage_collect(c_p, need, reg, (Live)+1)) < 0)	\
+	   goto sys_limit;						\
+       FCALLS -= fc;							\
        PROCESS_MAIN_CHK_LOCKS(c_p);					\
        if (Live > 0) {							\
 	   r(0) = reg[0];						\
@@ -475,11 +483,14 @@ extern int count_instructions;
 #define TestGlobalHeap(Nh, Live, hp)                                    \
   do {                                                                  \
     unsigned need = (Nh);                                               \
+    int fc;								\
     ASSERT(global_heap <= g_htop && g_htop <= global_hend);             \
     if (g_hend - g_htop < need) {                                       \
        SWAPOUT;                                                         \
        reg[0] = r(0);                                                   \
-       FCALLS -= erts_global_garbage_collect(c_p, need, reg, (Live));   \
+       if ((fc = erts_global_garbage_collect(c_p, need, reg, (Live))) < 0) \
+	   goto sys_limit;						\
+       FCALLS -= fc;							\
        r(0) = reg[0];                                                   \
        SWAPIN;                                                          \
     }                                                                   \
@@ -1142,6 +1153,29 @@ void process_main(void)
  do_schedule:
     reds_used = REDS_IN(c_p) - FCALLS;
  do_schedule1:
+#ifdef LIMITS
+    // Limit checks when schedule out current process
+    if (c_p && c_p->limits &&
+	(c_p->status != P_FREE) && (c_p->status != P_EXITING)) {
+	if (erts_have_limit(c_p->limits, LIMIT_REDUCTIONS)) {
+	    if (erts_update_limit(c_p->limits, LIMIT_REDUCTIONS, reds_used))
+		goto sys_limit;
+	}
+	else if (erts_check_time_limits(c_p, 0))
+	    goto sys_limit;
+    }
+    goto limit_ok;
+
+    sys_limit:
+        // erts_printf("do_schedule1: %T: sys_limit\r\n", c_p->id);
+	c_p->freason = SYSTEM_LIMIT;
+	c_p->arity = 0;
+	ERTS_SMP_UNREQ_PROC_MAIN_LOCK(c_p);
+	erts_do_exit_process(c_p, am_system_limit);
+	ERTS_SMP_REQ_PROC_MAIN_LOCK(c_p);	
+
+limit_ok:
+#endif
     PROCESS_MAIN_CHK_LOCKS(c_p);
     ERTS_SMP_UNREQ_PROC_MAIN_LOCK(c_p);
     c_p = schedule(c_p, reds_used);
@@ -1150,6 +1184,16 @@ void process_main(void)
 #endif
     ERTS_SMP_REQ_PROC_MAIN_LOCK(c_p);
     PROCESS_MAIN_CHK_LOCKS(c_p);
+
+#ifdef LIMITS
+    // cp is assumed to be active by schedule
+    if (c_p->limits) {
+	if (erts_check_time_limits(c_p, 1))
+	    goto sys_limit;
+    }
+#endif
+
+
 #ifdef ERTS_SMP
     reg = c_p->scheduler_data->save_reg;
     freg = c_p->scheduler_data->freg;
@@ -1488,9 +1532,12 @@ void process_main(void)
 	     /* only x(2) is included in the rootset here */
 	     if (E - HTOP < 3 || c_p->mbuf) {	/* Force GC in case add_stacktrace()
 						 * created heap fragments */
+		 int fc;
 		 SWAPOUT;
 		 PROCESS_MAIN_CHK_LOCKS(c_p);
-		 FCALLS -= erts_garbage_collect(c_p, 3, reg+2, 1);
+		 if ((fc = erts_garbage_collect(c_p, 3, reg+2, 1)) < 0)
+		     goto sys_limit;
+		 FCALLS -= fc;
 		 PROCESS_MAIN_CHK_LOCKS(c_p);
 		 SWAPIN;
 	     }
@@ -1544,7 +1591,13 @@ void process_main(void)
      ErlMessage* msgp;
 
  loop_rec__:
-
+#ifdef LIMITS
+     // erts_printf("loop_rec__: %T\n", c_p->id);
+     if (erts_update_time_limit(c_p->limits)) {
+	 c_p->freason = SYSTEM_LIMIT;
+	 goto find_func_info;
+     }
+#endif
      PROCESS_MAIN_CHK_LOCKS(c_p);
 
      msgp = PEEK_MESSAGE(c_p);
@@ -1694,12 +1747,14 @@ void process_main(void)
 	      */
 	     c_p->def_arg_reg[0] = (Eterm) (I+3);
 	     set_timer(c_p, unsigned_val(timeout_value));
+	     goto wait2;
 	 } else if (timeout_value == am_infinity) {
-	     c_p->flags |= F_TIMO;
+	     goto wait3;
 #if !defined(ARCH_64)
 	 } else if (term_to_Uint(timeout_value, &time_val)) {
 	     c_p->def_arg_reg[0] = (Eterm) (I+3);
 	     set_timer(c_p, time_val);
+	     goto wait2;
 #endif
 	 } else {		/* Wrong time */
 	     OpCase(i_wait_error_locked): {
@@ -1724,6 +1779,20 @@ void process_main(void)
 
 	 OpCase(wait_locked_f):
 	 OpCase(wait_f):
+        wait3: {
+#ifdef LIMITS
+	     if (erts_have_limit(c_p->limits, LIMIT_TIME)) {
+		 // erts_printf("wait3: setting timer\n");
+		 c_p->def_arg_reg[0] = (Eterm) (I+3);
+		 // c_p->def_arg_reg[0] = (Eterm) Arg(0);
+		 set_timer(c_p, (Uint)(-1));  // set_timer will fix the limit
+	     }
+	     else
+		 c_p->flags |= F_TIMO;
+#else
+	     c_p->flags |= F_TIMO;
+#endif
+	 }
 
 	 wait2: {
 	     ASSERT(!ERTS_PROC_IS_EXITING(c_p));
@@ -1737,7 +1806,7 @@ void process_main(void)
 	 }
 	 OpCase(wait_unlocked_f): {
 	     erts_smp_proc_lock(c_p, ERTS_PROC_LOCKS_MSG_RECEIVE);
-	     goto wait2;
+	     goto wait3;
 	 }
      }
      erts_smp_proc_unlock(c_p, ERTS_PROC_LOCKS_MSG_RECEIVE);
@@ -2940,7 +3009,8 @@ void process_main(void)
 	 r(0) = reg[0];
 	 ASSERT(!is_value(r(0)));
 	 if (c_p->mbuf) {
-	     erts_garbage_collect(c_p, 0, reg+1, 3);
+	     if (erts_garbage_collect(c_p, 0, reg+1, 3) < 0)
+		 goto sys_limit;
 	 }
 	 SWAPIN;
 	 Goto(*I);
@@ -4234,9 +4304,12 @@ void process_main(void)
 	 if (flags & MATCH_SET_RX_TRACE) {
 	     ASSERT(c_p->htop <= E && E <= c_p->hend);
 	     if (E - 3 < HTOP) {
+		 int fc;
 		 /* SWAPOUT, SWAPIN was done and r(0) was saved above */
 		 PROCESS_MAIN_CHK_LOCKS(c_p);
-		 FCALLS -= erts_garbage_collect(c_p, 3, reg, ep->code[2]);
+		 if ((fc = erts_garbage_collect(c_p, 3, reg, ep->code[2])) < 0)
+		     goto sys_limit;
+		 FCALLS -= fc;
 		 PROCESS_MAIN_CHK_LOCKS(c_p);
 		 r(0) = reg[0];
 		 SWAPIN;
@@ -4352,9 +4425,12 @@ void process_main(void)
      if (need) {
 	 ASSERT(c_p->htop <= E && E <= c_p->hend);
 	 if (E - need < HTOP) {
+	     int fc;
 	     /* SWAPOUT was done and r(0) was saved above */
 	     PROCESS_MAIN_CHK_LOCKS(c_p);
-	     FCALLS -= erts_garbage_collect(c_p, need, reg, I[-1]);
+	     if ((fc = erts_garbage_collect(c_p, need, reg, I[-1])) < 0)
+		 goto sys_limit;
+	     FCALLS -= fc;
 	     PROCESS_MAIN_CHK_LOCKS(c_p);
 	     r(0) = reg[0];
 	     SWAPIN;

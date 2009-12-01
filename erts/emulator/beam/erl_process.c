@@ -359,6 +359,291 @@ erts_smp_lc_runq_is_locked(ErtsRunQueue *runq)
 }
 #endif
 
+#ifdef LIMITS
+
+int erts_isset_timeval(SysTimeval* t)
+{
+    return (t->tv_sec != 0) || (t->tv_usec != 0);
+}
+
+/*
+ * Return time elapsed from t0 to t1 in milliseconds
+ */
+Uint32 erts_diff_timeval_ms(SysTimeval* t1, SysTimeval* t0)
+{
+    Uint32 ms = 0;
+
+    if (t1->tv_sec == t0->tv_sec) {
+	if (t1->tv_usec > t0->tv_usec)
+	    ms = (t1->tv_usec - t0->tv_usec)/1000;
+    }
+    else if (t1->tv_sec > t0->tv_sec) {
+	ms = (t1->tv_sec - t0->tv_sec)*1000;
+	if (t1->tv_usec >= t0->tv_usec)
+	    ms += (t1->tv_usec - t0->tv_usec)/1000;
+	else
+	    ms -= ((t0->tv_sec - t1->tv_sec))/1000;
+    }
+    return ms;
+}
+
+void erts_add_timeval_ms(SysTimeval* t0, Uint32 ms, SysTimeval* t1)
+{
+    Uint32 sec = t0->tv_sec + (ms / 1000);
+    Uint32 us  = t0->tv_usec + (ms % 1000)*1000;
+
+    if (us >= 1000000) {
+	sec++;
+	us -= 1000000;
+    }
+    t1->tv_sec = sec;
+    t1->tv_usec = us;
+}
+
+/* Check if limit exist */
+int erts_have_limit(ErtsLimits* limits, int k)
+{
+    ASSERT((k >= 0) && (k < NLIMITS));
+    return (limits && limits->kind[k]);
+}
+
+ErtsLimit* erts_ref_limit(ErtsLimit* limit)
+{
+    if (limit)
+	erts_refc_inc(&limit->refc, 1);
+    return limit;
+}
+
+void erts_unref_limit(ErtsLimit* limit)
+{
+    while(limit) {
+	ErtsLimit* creator;
+	
+	if (erts_refc_dectest(&limit->refc, 0) > 0)
+	    return;
+	if ((creator = limit->creator)) {
+	    switch(limit->kind) {
+	    case LIMIT_TIME:
+		break;
+	    case LIMIT_CPU:
+		// give back remaining cpu!
+		erts_smp_atomic_add(&creator->value,
+				    ((long)limit->max) -
+				    erts_smp_atomic_read(&limit->value));
+		break;
+	    default:
+		// give back everything
+		erts_smp_atomic_add(&creator->value,-((long)limit->max));
+		break;
+	    }
+	    erts_free(ERTS_ALC_T_LIMIT, limit);
+	}
+	limit = creator;
+    }
+}
+
+ErtsLimit* erts_new_limit(Uint32 kind, Uint32 max, Uint32 ivalue)
+{
+    ErtsLimit* limit = erts_alloc(ERTS_ALC_T_LIMIT, sizeof(ErtsLimit));
+    
+    erts_refc_init(&limit->refc, 1);
+    limit->kind = kind;
+    limit->creator = 0;
+    limit->max   = max;
+    erts_smp_atomic_init(&limit->value, ivalue);
+    return limit;
+}
+
+ErtsLimits* erts_ref_limits(ErtsLimits* limits)
+{
+    if (limits)
+	erts_refc_inc(&limits->refc, 1);
+    return limits;
+}
+
+void erts_unref_limits(ErtsLimits* limits)
+{
+    if (limits) {
+	if (erts_refc_dectest(&limits->refc, 0) <= 0) {
+	    int i;
+	    for (i = 0; i < NLIMITS; i++)
+		erts_unref_limit(limits->kind[i]);
+	    erts_free(ERTS_ALC_T_LIMITS, limits);
+	}
+    }
+}
+
+Eterm erts_limits_get_uid(ErtsLimits* limits)
+{
+    if (limits)
+	return limits->uid;
+    return make_small(0);
+}
+
+void erts_limits_set_uid(ErtsLimits* limits, Eterm uid)
+{
+    if (limits)
+	limits->uid = uid;
+}
+
+Eterm erts_limits_get_gid(ErtsLimits* limits)
+{
+    if (limits)
+	return limits->gid;
+    return make_small(0);
+}
+
+void erts_limits_set_gid(ErtsLimits* limits, Eterm gid)
+{
+    if (limits)
+	limits->gid = gid;
+}
+
+/*
+ * erts_set_limit:
+ *   Setup a new limit
+ */
+
+void erts_set_limit(ErtsLimits* limits, int k, ErtsLimit* limit)
+{
+    if (limits) {
+	erts_unref_limit(limits->kind[k]); // unref old limit
+	limits->kind[k] = limit;  // no ref here!
+    }
+}
+
+/*
+ * erts_new_limit:
+ *  create a new limits structure default all values
+ *  to the ones of the parent
+ */
+ErtsLimits* erts_new_limits(ErtsLimits* creator)
+{
+    ErtsLimits* limits = erts_alloc(ERTS_ALC_T_LIMITS, sizeof(ErtsLimits));
+    int i;
+
+    erts_refc_init(&limits->refc, 1);
+    for (i = 0; i < NLIMITS; i++)
+	limits->kind[i] = creator ? erts_ref_limit(creator->kind[i]) : 0;
+    return limits;
+}
+
+#if defined(DEBUG)
+static void erts_debug_limit(ErtsLimits* limits, int k)
+{
+    char* what = "unknown";
+
+    switch(k) {
+    case LIMIT_UID:
+	erts_print(ERTS_PRINT_STDOUT, NULL, 	
+		   "limit: uid %d\n", signed_val(limits->uid));
+	return;
+    case LIMIT_GID:
+	erts_print(ERTS_PRINT_STDOUT, NULL, 	
+		   "limit: gid %d\n", signed_val(limits->gid));
+	return;
+    case LIMIT_PROCESSES:  what = "processes"; break;
+    case LIMIT_PORTS:      what = "ports"; break;
+    case LIMIT_TABLES:     what = "tables"; break;
+    case LIMIT_REDUCTIONS: what = "reductions"; break;
+    case LIMIT_MEMORY:     what = "memory"; break;
+    case LIMIT_CPU:        what = "cpu"; break;
+    case LIMIT_MQLEN:      what = "message_queue_len"; break;
+    }
+    if (!limits || !limits->kind[k])
+	erts_print(ERTS_PRINT_STDOUT, NULL, 	
+		   "limit: %s  no limit\n");
+    else 
+	erts_print(ERTS_PRINT_STDOUT, NULL, 
+		   "limit: %s max=%ld val=%ld\n",
+		   what, limits->kind[k]->max, limits->kind[k]->value);
+}
+#define ERTS_DEBUG_LIMIT(limits,k) erts_debug_limit((limits),(k))
+#else
+#define ERTS_DEBUG_LIMIT(limits,k) 
+#endif
+
+
+/*
+ * Perform limit update 
+ *   return 1 if update will cause the limt to pass max
+ *   return 0 otherwise
+ */
+int erts_update_limit(ErtsLimits* limits, int k, long incr)
+{
+    if (limits) {
+	ErtsLimit* limit = limits->kind[k];
+	if (limit) {
+	    if (incr > 0) {
+		erts_smp_atomic_add(&limit->value, incr);
+		ERTS_DEBUG_LIMIT(limits, k);
+		if (erts_smp_atomic_read(&limit->value) > limit->max) {
+		    erts_smp_atomic_add(&limit->value, -incr);
+		    return 1;
+		}
+	    }
+	    else if (incr < 0) {
+		erts_smp_atomic_add(&limit->value, incr);
+		ERTS_DEBUG_LIMIT(limits, k);
+	    }
+	}
+    }
+    return 0;
+}
+
+// update & check LIMIT_TIME
+int erts_update_time_limit(ErtsLimits* limits)
+{
+    if (erts_have_limit(limits, LIMIT_TIME)) {
+	long td;
+	Uint32 max = limits->kind[LIMIT_TIME]->max;
+	SysTimeval emu_time;
+	erts_get_emu_time(&emu_time);
+	td = (long) erts_diff_timeval_ms(&emu_time, &limits->time);
+	if (td > max) td=max;
+	erts_print(ERTS_PRINT_STDOUT, NULL, "limit: update_time %ld max=%lu\n", 
+		    td, max);
+	erts_smp_atomic_set(&limits->kind[LIMIT_TIME]->value, td);
+	return (td >= max);
+    }
+    return 0;
+}
+
+// update and check both LIMIT_TIME & LIMIT_CPU
+// return 1 if limit is reached, 0 otherwise
+int erts_check_time_limits(Process* p, int schedule_in)
+{
+    SysTimeval emu_time = {0,0};
+    int res = 0;
+
+    if (erts_have_limit(p->limits, LIMIT_TIME)) {
+	long td;
+	Uint32 max = p->limits->kind[LIMIT_TIME]->max;
+	erts_get_emu_time(&emu_time);
+	td = (long) erts_diff_timeval_ms(&emu_time, &p->limits->time);
+	if (td > max) td=max;
+	erts_smp_atomic_set(&p->limits->kind[LIMIT_TIME]->value, td);
+	res = (td >= max);
+    }
+    if (erts_have_limit(p->limits, LIMIT_CPU)) {
+	if (!erts_isset_timeval(&emu_time))
+	    erts_get_emu_time(&emu_time);
+	if (schedule_in)
+	    p->in_time = emu_time;
+	else {
+	    Uint32 ms;
+	    ms = erts_diff_timeval_ms(&emu_time, &p->in_time);
+	    res = res || erts_update_limit(p->limits, LIMIT_CPU, ms);
+	}
+    }
+    return res;
+}
+
+
+
+#endif
+
+
 void
 erts_pre_init_process(void)
 {
@@ -6535,7 +6820,7 @@ erts_free_proc(Process *p)
 ** Allocate process and find out where to place next process.
 */
 static Process*
-alloc_process(void)
+alloc_process(Process* parent)
 {
 #ifdef ERTS_SMP
     erts_pix_lock_t *pix_lock;
@@ -6543,6 +6828,10 @@ alloc_process(void)
     Process* p;
     int p_prev;
 
+#ifdef LIMITS
+    if (erts_update_limit(parent->limits, LIMIT_PROCESSES, 1))
+	return NULL;
+#endif
     erts_smp_mtx_lock(&proc_tab_mtx);
 
     if (p_next == -1) {
@@ -6657,14 +6946,116 @@ erl_create_process(Process* parent, /* Parent of process (default group leader).
 	so->error_code = BADARG;
 	goto error;
     }
-    p = alloc_process(); /* All proc locks are locked by this thread
-			    on success */
+    p = alloc_process(parent); /* All proc locks are locked by this thread
+				  on success */
     if (!p) {
 	erts_send_error_to_logger_str(parent->group_leader,
 				      "Too many processes\n");
 	so->error_code = SYSTEM_LIMIT;
 	goto error;
     }
+#ifdef LIMITS
+    if ((so->flags & SPO_USE_ARGS) && so->limit_flags) {
+	int i;
+	if (parent->limits) {
+	    /* Check uid */
+	    if (so->limit_flags & (1 << LIMIT_UID)) {
+		Eterm puid = erts_limits_get_uid(parent->limits);
+		if ((signed_val(puid) > 1) && 
+		    (signed_val(puid) != signed_val(so->uid))) {
+		    so->error_code = SYSTEM_LIMIT;
+		    erts_free_proc(p);
+		    goto error;
+		}
+	    }
+
+	    /* Check gid */
+	    if (so->limit_flags & (1 << LIMIT_GID)) {
+		Eterm puid = erts_limits_get_uid(parent->limits);
+		Eterm pgid = erts_limits_get_gid(parent->limits);
+		if ((signed_val(puid) > 1) && 
+		    (signed_val(pgid) != signed_val(so->gid))) {
+		    so->error_code = SYSTEM_LIMIT;
+		    erts_free_proc(p);
+		    goto error;
+		}
+	    }
+
+	    // Check time
+	    if (so->limit_flags & (1 << LIMIT_TIME)) {
+		if (erts_have_limit(parent->limits, LIMIT_TIME)) {
+		    // assert that so->time > parent->time!
+		    Uint32 td = erts_diff_timeval_ms(&so->time,
+						     &parent->limits->time);
+		    Uint32 ct = so->limit[LIMIT_TIME];
+		    Uint32 pt = parent->limits->kind[LIMIT_TIME]->max;
+		    Uint32 pct = td + ct;
+
+		    if (pct > pt) { // limit child time
+			ct = pct - pt;
+			if (ct <= td)
+			    ct = 0;
+			so->limit[LIMIT_TIME] = ct;
+		    }
+		}
+	    }
+
+	    /* Try allocate resources from parent */
+	    for (i=0; i < NLIMITS; i++) {
+		switch(i) {
+		case LIMIT_MQLEN: continue; // not using parent resource
+		case LIMIT_TIME:  continue; // check agains max
+		default: break;
+		}
+		if (so->limit_flags & (1 << i)) {
+		    if (erts_update_limit(parent->limits,i,so->limit[i])) {
+			i--;
+			while(i >= 0) {
+			    erts_update_limit(parent->limits,i,-so->limit[i]);
+			    i--;
+			}
+			/* maybe hint what resource that failed ? */
+			erts_printf("beam_emu: erl_create_process\r\n");
+			so->error_code = SYSTEM_LIMIT;
+			erts_free_proc(p);
+			goto error;
+		    }
+		}
+	    }
+	}
+
+	// Now install the new limits 
+	p->limits = erts_new_limits(parent->limits);
+
+	if (so->limit_flags & ((1<<LIMIT_TIME)|(1<<LIMIT_CPU)))
+	    p->limits->time = so->time;
+	else if (parent->limits) {
+            // use parent limit time if present (to be able to correct children)
+	    p->limits->time = parent->limits->time;
+	}
+
+	if (so->limit_flags & (1 << LIMIT_UID))
+	    erts_limits_set_uid(p->limits, so->uid);
+	else
+	    erts_limits_set_uid(p->limits, erts_limits_get_uid(parent->limits));
+	
+	if (so->limit_flags & (1 << LIMIT_GID))
+	    erts_limits_set_gid(p->limits, so->gid);
+	else
+	    erts_limits_set_gid(p->limits, erts_limits_get_gid(parent->limits));
+
+	for (i=0; i < NLIMITS; i++) {
+	    if (so->limit_flags & (1 << i)) {
+		ErtsLimit* creator = p->limits->kind[i];
+		p->limits->kind[i] = erts_new_limit(i, so->limit[i], 0);
+		p->limits->kind[i]->creator = creator; //link in
+	    }
+	}
+    }
+    else {
+	p->limits = erts_ref_limits(parent->limits);
+    }
+#endif
 
     processes_busy++;
     BM_COUNT(processes_spawned);
@@ -6724,6 +7115,16 @@ erl_create_process(Process* parent, /* Parent of process (default group leader).
 #endif
 #endif
 
+#ifdef LIMITS
+    if (p->limits && erts_have_limit(p->limits, LIMIT_MEMORY)) {
+	if (erts_update_limit(p->limits, LIMIT_MEMORY, sz)) {
+	    so->error_code = SYSTEM_LIMIT;
+	    erts_unref_limits(p->limits);
+	    erts_free_proc(p);
+	    goto error;
+	}
+    }
+#endif
     p->heap = (Eterm *) ERTS_HEAP_ALLOC(ERTS_ALC_T_HEAP, sizeof(Eterm)*sz);
     p->old_hend = p->old_htop = p->old_heap = NULL;
     p->high_water = p->heap;
@@ -7093,6 +7494,10 @@ void erts_init_empty_process(Process *p)
     p->fp_exception = 0;
 #endif
 
+#ifdef LIMITS
+    p->limits = NULL;
+#endif
+
 }    
 
 #ifdef DEBUG
@@ -7200,7 +7605,6 @@ delete_process(Process* p)
     VERBOSE(DEBUG_PROCESSES, ("Removing process: %T\n",p->id));
 
     /* Cleanup psd */
-
     if (p->psd)
 	erts_free(ERTS_ALC_T_PSD, p->psd);
 
@@ -8097,6 +8501,22 @@ continue_exit_process(Process *p
 	p->suspend_monitors = NULL;
     }
 
+#ifdef LIMITS
+    // we first need to release, the memory to the process,
+    // this is propageted back to creator when unref.
+    // FIXME: move this to where the data is deleted!!! (if possible)
+    if (p->limits && erts_have_limit(p->limits, LIMIT_MEMORY)) {
+	long sz = HEAP_SIZE(p);
+	sz += OLD_HEAP(p) ? (OLD_HEND(p) - OLD_HEAP(p)) : 0;
+	// erts_printf("Release %d memory to limits\r\n", sz);
+	erts_update_limit(p->limits, LIMIT_MEMORY, -sz);
+    }
+    /* Detach limits so resources are release before EXIT signals are send */
+    erts_update_limit(p->limits, LIMIT_PROCESSES, -1);
+    erts_unref_limits(p->limits);
+#endif
+
+
     /*
      * The registered name *should* be the last "erlang resource" to
      * cleanup.
@@ -8286,6 +8706,27 @@ void
 set_timer(Process* p, Uint timeout)
 {
     ERTS_SMP_LC_ASSERT(ERTS_PROC_LOCK_MAIN & erts_proc_lc_my_proc_locks(p));
+
+#ifdef LIMITS
+    if (erts_have_limit(p->limits, LIMIT_TIME)) {
+	Uint remain;
+	Uint32 max = p->limits->kind[LIMIT_TIME]->max;
+	long td;
+	SysTimeval emu_time;
+	erts_get_emu_time(&emu_time);
+	td = (long) erts_diff_timeval_ms(&emu_time, &p->limits->time);
+	if (td > max) td=max;
+	erts_smp_atomic_set(&p->limits->kind[LIMIT_TIME]->value, td);
+	remain = (max - td);  // FIXME: +1 needed ?
+	if (remain < timeout) {
+#ifdef DEBUG
+	    erts_printf("set_timer: %T: timer restricted from %lu to %lu\r\n",
+			p->id, timeout, remain);
+#endif
+	    timeout = remain;
+	}
+    }
+#endif
 
     /* check for special case timeout=0 DONT ADD TO time queue */
     if (timeout == 0) {

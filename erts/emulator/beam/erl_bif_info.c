@@ -104,6 +104,9 @@ static char erts_system_version[] = ("Erlang " ERLANG_OTP_RELEASE
 #ifdef VALGRIND
 				     " [valgrind-compiled]"
 #endif
+#ifdef LIMITS
+				     " [limits]"
+#endif
 				     "\n");
 
 #define ASIZE(a) (sizeof(a)/sizeof(a[0]))
@@ -543,6 +546,26 @@ static Eterm pi_args[] = {
     am_last_calls,
     am_total_heap_size,
     am_suspending,
+#ifdef LIMITS
+    am_max_processes,
+    am_max_ports,
+    am_max_tables,
+    am_max_memory,
+    am_max_reductions,
+    am_max_cpu,
+    am_max_time,
+    am_remaining_processes,
+    am_remaining_ports,
+    am_remaining_tables,
+    am_remaining_memory,
+    am_remaining_reductions,
+    am_remaining_cpu,
+    am_remaining_time,
+    am_uid,
+    am_gid,
+    am_max_message_queue_len,
+    am_remaining_message_queue_len,
+#endif
 #ifdef HYBRID
     am_message_binary
 #endif
@@ -589,8 +612,35 @@ pi_arg2ix(Eterm arg)
     case am_last_calls:				return 24;
     case am_total_heap_size:			return 25;
     case am_suspending:				return 26;
-#ifdef HYBRID
-    case am_message_binary:			return 27;
+#define PI_IX1 27
+#ifdef LIMITS
+    case am_max_processes:                      return PI_IX1;
+    case am_max_ports:                          return PI_IX1+1;
+    case am_max_tables:                         return PI_IX1+2;
+    case am_max_memory:                         return PI_IX1+3;
+    case am_max_reductions:                     return PI_IX1+4;
+    case am_max_cpu:                            return PI_IX1+5;
+    case am_max_time:                           return PI_IX1+6;
+    case am_remaining_processes:                return PI_IX1+7;
+    case am_remaining_ports:                    return PI_IX1+8;
+    case am_remaining_tables:                   return PI_IX1+9;
+    case am_remaining_memory:                   return PI_IX1+10;
+    case am_remaining_reductions:               return PI_IX1+11;
+    case am_remaining_cpu:                      return PI_IX1+12;
+    case am_remaining_time:                     return PI_IX1+13;
+    case am_uid:			        return PI_IX1+14;
+    case am_gid:			        return PI_IX1+15;
+    case am_max_message_queue_len:              return PI_IX1+16;
+    case am_remaining_message_queue_len:        return PI_IX1+17; 
+#define PI_IX2 (PI_IX1+18)
+#endif
+
+#ifndef PI_IX2
+#define PI_IX2 PI_IX1
+#endif
+
+#if defined(HYBRID)
+    case am_message_binary:			return PI_IX2;
 #endif
     default:					return -1;
     }
@@ -712,6 +762,7 @@ process_info_list(Process *c_p, Eterm pid, Eterm list, int always_wrap,
 
 	arg = CAR(consp);
 	ix = pi_arg2ix(arg);
+
 	if (ix < 0) {
 	    res = THE_NON_VALUE;
 	    goto done;
@@ -939,6 +990,51 @@ BIF_RETTYPE process_info_2(BIF_ALIST_2)
     ASSERT(!(BIF_P->flags & F_P2PNR_RESCHED));
     BIF_RET(res);
 }
+
+#ifdef LIMITS
+
+static Eterm process_info_max_limit(Process *BIF_P, Process *rp, 
+				    Eterm item, int k)
+{
+    Eterm *hp;
+    Eterm res = NIL;
+
+    if (erts_have_limit(rp->limits, k)) {
+	Uint val = rp->limits->kind[k]->max;
+	Uint hsz = 3;
+	(void) erts_bld_uint(NULL, &hsz, val);
+	hp = HAlloc(BIF_P, hsz);
+	res = erts_bld_uint(&hp, NULL, val);
+    }
+    else
+	hp = HAlloc(BIF_P, 3);
+    return TUPLE2(hp, item, res);
+}
+
+static Eterm process_info_rem_limit(Process *BIF_P, Process *rp, 
+				    Eterm item, int k)
+{
+    Eterm *hp;
+    Eterm res = NIL;
+    
+    if (erts_have_limit(rp->limits, k)) {
+	Uint val = erts_smp_atomic_read(&rp->limits->kind[k]->value);
+	Uint hsz = 3;
+
+	if (val > rp->limits->kind[k]->max)
+	    val = 0;
+	else
+	    val = rp->limits->kind[k]->max - val;
+	(void) erts_bld_uint(NULL, &hsz, val);
+	hp = HAlloc(BIF_P, hsz);
+	res = erts_bld_uint(&hp, NULL, val);
+    }
+    else
+	hp = HAlloc(BIF_P, 3);
+    return TUPLE2(hp, item, res);
+}
+
+#endif
 
 Eterm
 process_info_aux(Process *BIF_P,
@@ -1555,7 +1651,51 @@ process_info_aux(Process *BIF_P,
 	}
 	break;
     }
-
+#ifdef LIMITS
+    case am_max_processes:
+	return process_info_max_limit(BIF_P, rp, item, LIMIT_PROCESSES);
+    case am_max_ports:
+	return process_info_max_limit(BIF_P, rp, item, LIMIT_PORTS);
+    case am_max_tables:
+	return process_info_max_limit(BIF_P, rp, item, LIMIT_TABLES);
+    case am_max_memory:
+	return process_info_max_limit(BIF_P, rp, item, LIMIT_MEMORY);
+    case am_max_reductions:
+	return process_info_max_limit(BIF_P, rp, item, LIMIT_REDUCTIONS);
+    case am_max_message_queue_len:
+	return process_info_max_limit(BIF_P, rp, item, LIMIT_MQLEN);
+    case am_max_cpu:
+	return process_info_max_limit(BIF_P, rp, item, LIMIT_CPU);
+    case am_max_time:
+	return process_info_max_limit(BIF_P, rp, item, LIMIT_TIME);
+    case am_remaining_processes:
+	return process_info_rem_limit(BIF_P, rp, item, LIMIT_PROCESSES);
+    case am_remaining_ports:
+	return process_info_rem_limit(BIF_P, rp, item, LIMIT_PORTS);
+    case am_remaining_tables:
+	return process_info_rem_limit(BIF_P, rp, item, LIMIT_TABLES);
+    case am_remaining_memory:
+	return process_info_rem_limit(BIF_P, rp, item, LIMIT_MEMORY);
+    case am_remaining_reductions:
+	return process_info_rem_limit(BIF_P, rp, item, LIMIT_REDUCTIONS);
+    case am_remaining_cpu:
+	return process_info_rem_limit(BIF_P, rp, item, LIMIT_CPU);
+    case am_remaining_time:
+	return process_info_rem_limit(BIF_P, rp, item, LIMIT_TIME);
+    case am_remaining_message_queue_len:
+	hp = HAlloc(BIF_P, 3);
+	res = rp->msg.len  - (erts_have_limit(rp->limits, LIMIT_MQLEN) ?
+			      rp->limits->kind[LIMIT_MQLEN]->max : 0);
+	break;
+    case am_uid:
+	hp = HAlloc(BIF_P, 3);
+	res = erts_limits_get_uid(rp->limits);
+	break;
+    case am_gid:
+	hp = HAlloc(BIF_P, 3);
+	res = erts_limits_get_gid(rp->limits);
+	break;
+#endif
     default:
 	return THE_NON_VALUE; /* will produce badarg */
 
@@ -2689,6 +2829,16 @@ BIF_RETTYPE port_info_2(BIF_ALIST_2)
 	}
 #endif
     }
+#ifdef LIMITS
+    else if (item == am_uid) {
+	hp = HAlloc(BIF_P, 3);
+	res = erts_limits_get_uid(prt->limits);
+    }    
+    else if (item == am_gid) {
+	hp = HAlloc(BIF_P, 3);
+	res = erts_limits_get_gid(prt->limits);
+    }    
+#endif
     else {
 	ERTS_BIF_PREP_ERROR(ret, BIF_P, BADARG);
 	goto done;

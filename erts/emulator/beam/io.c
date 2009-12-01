@@ -405,6 +405,9 @@ setup_port(Port* prt, Eterm pid, erts_driver_t *driver,
     prt->linebuf = NULL;
     prt->bp = NULL;
     prt->data = am_undefined;
+#ifdef LIMITS
+    prt->limits = NULL;
+#endif
     /* Set default tracing */
     erts_get_default_tracing(&(prt->trace_flags), &(prt->tracer_proc));
 
@@ -673,6 +676,11 @@ driver_create_port(ErlDrvPort creator_port_ix, /* Creating port */
 
     ERTS_SMP_LC_ASSERT(erts_lc_is_port_locked(creator_port));
 
+#ifdef LIMITS
+    if (erts_update_limit(creator_port->limits, LIMIT_PORTS, 1))
+	return (ErlDrvTermData) -1;
+#endif
+
     driver = creator_port->drv_ptr;
     erts_smp_mtx_lock(&erts_driver_list_lock);
     if (!erts_ddll_driver_ok(driver->handle)) {
@@ -721,6 +729,9 @@ driver_create_port(ErlDrvPort creator_port_ix, /* Creating port */
 
     setup_port(port, pid, driver, drv_data, name, xstatus);
     port->id = port_id;
+#ifdef LIMITS
+    port->limits = erts_ref_limits(creator_port->limits);
+#endif
 
     erts_add_link(&(port->nlinks), LINK_PID, pid);
     erts_add_link(&(rp->nlinks), LINK_PID, port_id);
@@ -1770,7 +1781,9 @@ terminate_port(Port *prt)
 
     ASSERT(!prt->nlinks);
     ASSERT(!prt->monitors);
-
+#ifdef LIMITS
+    erts_update_limit(prt->limits, LIMIT_PORTS, -1);
+#endif
     if (prt->status & ERTS_PORT_SFLG_SEND_CLOSED) {
 	erts_port_status_band_set(prt, ~ERTS_PORT_SFLG_SEND_CLOSED);
 	send_closed_port_id = prt->id;

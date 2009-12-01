@@ -226,6 +226,7 @@ atom get_tcw
 atom getenv
 atom getting_linked
 atom getting_unlinked
+atom gid
 atom global
 atom global_heaps_size
 atom Gt='>'
@@ -278,6 +279,14 @@ atom line
 atom line_length
 atom linked_in_driver
 atom links
+# atom limit_cpu
+# atom limit_memory
+# atom limit_message_queue_len
+# atom limit_ports
+# atom limit_processes
+# atom limit_reductions
+# atom limit_tables
+# atom limit_time
 atom list
 atom little
 atom loaded
@@ -292,7 +301,14 @@ atom match
 atom match_spec
 atom max
 atom maximum
-atom max_tables max_processes
+atom max_cpu
+atom max_memory
+atom max_message_queue_len
+atom max_ports
+atom max_processes
+atom max_reductions
+atom max_tables
+atom max_time
 atom mbuf_size
 atom memory
 atom memory_types
@@ -433,6 +449,14 @@ atom register
 atom registered_name
 atom reload
 atom rem
+atom remaining_cpu
+atom remaining_memory
+atom remaining_message_queue_len
+atom remaining_tables
+atom remaining_processes
+atom remaining_ports
+atom remaining_reductions
+atom remaining_time
 atom reset
 atom restart
 atom return_from
@@ -509,6 +533,7 @@ atom try_clause
 atom true
 atom tuple
 atom type
+atom uid
 atom ucompile
 atom undef
 atom ungreedy

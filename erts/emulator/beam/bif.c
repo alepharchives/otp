@@ -55,6 +55,9 @@ BIF_RETTYPE spawn_3(BIF_ALIST_3)
     Eterm pid;
 
     so.flags = 0;
+#ifdef LIMITS
+    so.limit_flags = 0;
+#endif
     pid = erl_create_process(BIF_P, BIF_ARG_1, BIF_ARG_2, BIF_ARG_3, &so);
     if (is_non_value(pid)) {
 	BIF_ERROR(BIF_P, so.error_code);
@@ -771,6 +774,9 @@ BIF_RETTYPE spawn_link_3(BIF_ALIST_3)
     Eterm pid;
 
     so.flags = SPO_LINK;
+#ifdef LIMITS
+    so.limit_flags = 0;
+#endif
     pid = erl_create_process(BIF_P, BIF_ARG_1, BIF_ARG_2, BIF_ARG_3, &so);
     if (is_non_value(pid)) {
 	BIF_ERROR(BIF_P, so.error_code);
@@ -812,7 +818,9 @@ BIF_RETTYPE spawn_opt_1(BIF_ALIST_1)
     so.priority = PRIORITY_NORMAL;
     so.max_gen_gcs = (Uint16) erts_smp_atomic_read(&erts_max_gen_gcs);
     so.scheduler = 0;
-
+#ifdef LIMITS
+    so.limit_flags = 0;
+#endif
     /*
      * Walk through the option list.
      */
@@ -864,6 +872,54 @@ BIF_RETTYPE spawn_opt_1(BIF_ALIST_1)
 		if (scheduler < 0 || erts_no_schedulers < scheduler)
 		    goto error;
 		so.scheduler = (int) scheduler;
+#ifdef LIMITS
+	    } else if (arg==am_uid && is_small(val) && signed_val(val) >=0) {
+		// FIXME: check uid > 1
+		// Only uid=0 or uid=1? may set uid > 1
+		so.limit_flags |= (1 << LIMIT_UID);
+		so.uid = val;
+	    } else if (arg==am_gid && is_small(val) && signed_val(val) >=0) {
+		// FIXME: check gid > 1 */
+		// Only caller with uid=0 or uid=1? may set gid > 1
+		so.limit_flags |= (1 << LIMIT_GID);
+		so.gid = val;
+	    } else if (arg == am_max_time && is_small(val) &&
+		       signed_val(val) > 0) {
+		if ((so.limit_flags & ((1<<LIMIT_TIME) || (1<<LIMIT_CPU))) == 0)
+		    erts_get_emu_time(&so.time);
+		so.limit_flags |= (1 << LIMIT_TIME);
+		so.limit[LIMIT_TIME] = signed_val(val);
+	    } else if ((arg == am_max_cpu) && 
+		       is_small(val) && (signed_val(val) > 0)) {
+		if ((so.limit_flags & ((1<<LIMIT_TIME) || (1<<LIMIT_CPU))) == 0)
+		    erts_get_emu_time(&so.time);
+		so.limit_flags |= (1 << LIMIT_CPU);
+		so.limit[LIMIT_CPU] = signed_val(val);
+	    } else if ((arg == am_max_processes) && 
+		       is_small(val) && (signed_val(val) >= 0)) {
+		so.limit_flags |= (1 << LIMIT_PROCESSES);
+		so.limit[LIMIT_PROCESSES] = signed_val(val);
+	    } else if ((arg == am_max_ports) && 
+		       is_small(val) && (signed_val(val) >= 0)) {
+		so.limit_flags |= (1 << LIMIT_PORTS);
+		so.limit[LIMIT_PORTS] = signed_val(val);
+	    } else if ((arg == am_max_tables) && 
+		       is_small(val) && (signed_val(val) >= 0)) {
+		so.limit_flags |= (1 << LIMIT_TABLES);
+		so.limit[LIMIT_TABLES] = signed_val(val);
+	    } else if ((arg == am_max_reductions) && 
+		       is_small(val) && (signed_val(val) > 0)) {
+		so.limit_flags |= (1 << LIMIT_REDUCTIONS);
+		so.limit[LIMIT_REDUCTIONS] = signed_val(val);
+	    } else if ((arg == am_max_memory) && 
+		       is_small(val) && (signed_val(val) > 0)) {
+		so.limit_flags |= (1 << LIMIT_MEMORY);
+		so.limit[LIMIT_MEMORY] = signed_val(val);
+	    } else if ((arg == am_max_message_queue_len) && 
+		       is_small(val) && (signed_val(val) > 0)) {
+		so.limit_flags |= (1 << LIMIT_MQLEN);
+		so.limit[LIMIT_MQLEN] = signed_val(val);
+#endif
 	    } else {
 		goto error;
 	    }
@@ -1625,6 +1681,9 @@ ebif_bang_2(Process* p, Eterm To, Eterm Message)
 #define SEND_BADARG		(-4)
 #define SEND_USER_ERROR		(-5)
 #define SEND_INTERNAL_ERROR	(-6)
+#ifdef LIMITS
+#define SEND_SYSTEM_LIMIT       (-7)
+#endif
 
 Sint do_send(Process *p, Eterm to, Eterm msg, int suspend);
 
@@ -1925,6 +1984,23 @@ do_send(Process *p, Eterm to, Eterm msg, int suspend) {
 	if (p == rp)
 	    rp_locks |= ERTS_PROC_LOCK_MAIN;
 #endif
+#ifdef LIMITS
+	if (erts_limits_get_uid(p->limits) != erts_limits_get_uid(rp->limits)) {
+	    // FIXME: Here we should send message to autority:
+	    //   {From,To,Message}
+	    res = SEND_SYSTEM_LIMIT;
+	    goto not_sent;
+	}
+	else if (erts_have_limit(rp->limits, LIMIT_MQLEN) &&
+		 (rp->msg.len >= rp->limits->kind[LIMIT_MQLEN]->max)) {
+	    // FIXME: use flavours
+	    //    crash sender (this version)
+	    //    crash receiver
+	    //    block sender (crash on deadlock)
+	    res = SEND_SYSTEM_LIMIT;
+	    goto not_sent;
+	}
+#endif
 	/* send to local process */
 	erts_send_message(p, rp, &rp_locks, msg, 0);
 	if (!erts_use_sender_punish)
@@ -1938,6 +2014,9 @@ do_send(Process *p, Eterm to, Eterm msg, int suspend) {
 	    res = rp->msg.len*4;
 #endif
 	}
+#ifdef LIMITS
+    not_sent:
+#endif	
 	erts_smp_proc_unlock(rp,
 			     p == rp
 			     ? (rp_locks & ~ERTS_PROC_LOCK_MAIN)
@@ -2005,6 +2084,11 @@ send_3(Process *p, Eterm to, Eterm msg, Eterm opts) {
     case SEND_INTERNAL_ERROR:
 	BIF_ERROR(p, EXC_INTERNAL_ERROR);
 	break;
+#ifdef LIMITS
+    case SEND_SYSTEM_LIMIT:
+	BIF_ERROR(p, SYSTEM_LIMIT); 
+	break;
+#endif
     default:
 	ASSERT(! "Illegal send result"); 
 	break;
@@ -2040,6 +2124,12 @@ send_2(Process *p, Eterm to, Eterm msg) {
 	break;
     case SEND_INTERNAL_ERROR:
 	BIF_ERROR(p, EXC_INTERNAL_ERROR);
+	break;
+#ifdef LIMITS
+    case SEND_SYSTEM_LIMIT:
+	BIF_ERROR(p, SYSTEM_LIMIT); 
+	break;
+#endif
 	break;
     default:
 	ASSERT(! "Illegal send result"); 
