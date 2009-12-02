@@ -997,6 +997,11 @@ void erts_offset_heap(Eterm*, Uint, Sint, Eterm*, Eterm*);
 int erts_global_garbage_collect(Process*, int, Eterm*, int);
 #endif
 
+#ifdef SEPARATE_STACK
+int erts_grow_stack(Process* p, int need);
+int erts_change_stack_size(Process* p, Uint new_sz);
+#endif
+
 /* io.c */
 
 struct erl_drv_port_data_lock {

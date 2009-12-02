@@ -1138,7 +1138,8 @@ trim_heap(Process* p, Eterm* hp, Eterm res)
 	ASSERT(p->heap <= new_htop && new_htop <= p->htop);
 	p->htop = new_htop;
     }
-    ASSERT(p->heap <= p->htop && p->htop <= p->stop);
+    ASSERT(HEAP_START(p) <= HEAP_TOP(p));
+    ASSERT(HEAP_TOP(p) <= HEAP_LIMIT(p));
 }
 
 /*

@@ -2055,7 +2055,7 @@ erts_bif_trace(int bif_index, Process* p,
 	    Uint i_return_to_trace = beam_return_to_trace[0];
 	    Eterm *cpp;
 	    /* Maybe advance cp to skip trace stack frames */
-	    for (cpp = p->stop;  ;  cp = cp_val(*cpp++)) {
+	    for (cpp = STACK_TOP(p);  ;  cp = cp_val(*cpp++)) {
 		ASSERT(is_CP((Eterm) cp));
 		if (*cp_val((Eterm) cp) == i_return_trace) {
 		    /* Skip stack frame variables */
@@ -2108,7 +2108,7 @@ erts_bif_trace(int bif_index, Process* p,
 		}
 		if ((flags & MATCH_SET_RETURN_TO_TRACE) && p->catches > 0) {
 		    /* can only happen if(local)*/
-		    Eterm *ptr = p->stop;
+		    Eterm *ptr = STACK_TOP(p);
 		    ASSERT(is_CP(*ptr));
 		    ASSERT(ptr <= STACK_START(p));
 		    /* Search the nearest stack frame for a catch */
@@ -2194,7 +2194,7 @@ trace_gc(Process *p, Eterm what)
 	HEAP_SIZE(p),
 	MBUF_SIZE(p),
 	HIGH_WATER(p) - HEAP_START(p),
-	STACK_START(p) - p->stop,
+	STACK_USED(p),
 	OLD_HEAP(p) ? OLD_HTOP(p) - OLD_HEAP(p) : 0,
 	HEAP_TOP(p) - HEAP_START(p)
     };
@@ -2287,7 +2287,7 @@ monitor_long_gc(Process *p, Uint time) {
 	OLD_HEAP(p) ? OLD_HEND(p) - OLD_HEAP(p) : 0,
 	HEAP_SIZE(p),
 	MBUF_SIZE(p),
-	STACK_START(p) - p->stop,
+	STACK_USED(p),
 	OLD_HEAP(p) ? OLD_HTOP(p) - OLD_HEAP(p) : 0,
 	HEAP_TOP(p) - HEAP_START(p)
     };
@@ -2358,7 +2358,7 @@ monitor_large_heap(Process *p) {
 	OLD_HEAP(p) ? OLD_HEND(p) - OLD_HEAP(p) : 0,
 	HEAP_SIZE(p),
 	MBUF_SIZE(p),
-	STACK_START(p) - p->stop,
+	STACK_USED(p),
 	OLD_HEAP(p) ? OLD_HTOP(p) - OLD_HEAP(p) : 0,
 	HEAP_TOP(p) - HEAP_START(p)
     };

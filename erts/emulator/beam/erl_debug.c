@@ -283,24 +283,24 @@ static int verify_eterm(Process *p,Eterm element)
 void erts_check_stack(Process *p)
 {
     Eterm *elemp;
-    Eterm *stack_start = p->heap + p->heap_sz;
-    Eterm *stack_end = p->htop;
+    Eterm *stack_start = STACK_START(p); // p->heap + p->heap_sz;
+    Eterm *stack_end   = STACK_END(p);   // p->htop;
 
-    if (p->stop > stack_start)
+    if (STACK_TOP(p) > stack_start)
 	erl_exit(1,
 		 "<%lu.%lu.%lu>: Stack underflow\n",
 		 internal_pid_channel_no(p->id),
 		 internal_pid_number(p->id),
 		 internal_pid_serial(p->id));
 
-    if (p->stop < stack_end)
+    if (STACK_TOP(p) < stack_end)
 	erl_exit(1,
 		 "<%lu.%lu.%lu>: Stack overflow\n",
 		 internal_pid_channel_no(p->id),
 		 internal_pid_number(p->id),
 		 internal_pid_serial(p->id));
 
-    for (elemp = p->stop; elemp < stack_start; elemp++) {
+    for (elemp = STACK_TOP(p); elemp < stack_start; elemp++) {
 	int in_mbuf = 0;
 	Eterm *ptr;
 	ErlHeapFragment* mbuf;

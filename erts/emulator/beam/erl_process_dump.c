@@ -113,12 +113,12 @@ dump_process_info(int to, void *to_arg, Process *p)
 
     if ((p->trace_flags & F_SENSITIVE) == 0) {
 	erts_print(to, to_arg, "=proc_stack:%T\n", p->id);
-	for (sp = p->stop; sp < STACK_START(p); sp++) {
+	for (sp = STACK_TOP(p); sp < STACK_START(p); sp++) {
 	    yreg = stack_element_dump(to, to_arg, p, sp, yreg);
 	}
 
 	erts_print(to, to_arg, "=proc_heap:%T\n", p->id);
-	for (sp = p->stop; sp < STACK_START(p); sp++) {
+	for (sp = STACK_TOP(p); sp < STACK_START(p); sp++) {
 	    Eterm term = *sp;
 	    
 	    if (!is_catch(term) && !is_CP(term)) {

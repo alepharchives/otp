@@ -248,22 +248,22 @@ extern int count_instructions;
     g_htop = global_htop;  \
     g_hend = global_hend;  \
     HTOP = HEAP_TOP(c_p);  \
-    E = c_p->stop
+    E = STACK_TOP(c_p)
 
 #define SWAPOUT            \
     global_htop = g_htop;  \
     global_hend = g_hend;  \
     HEAP_TOP(c_p) = HTOP;  \
-    c_p->stop = E
+    STACK_TOP(c_p) = E
 
 #else
 #define SWAPIN             \
     HTOP = HEAP_TOP(c_p);  \
-    E = c_p->stop
+    E = STACK_TOP(c_p)
 
 #define SWAPOUT            \
     HEAP_TOP(c_p) = HTOP;  \
-    c_p->stop = E
+    STACK_TOP(c_p) = E
 
 /*
  * Use LIGHT_SWAPOUT when the called function
@@ -288,7 +288,7 @@ extern int count_instructions;
 
 #define PRE_BIF_SWAPOUT(P)						\
      HEAP_TOP((P)) = HTOP;  						\
-     (P)->stop = E;  							\
+     STACK_TOP((P)) = E;						\
      PROCESS_MAIN_CHK_LOCKS((P));					\
      ERTS_SMP_UNREQ_PROC_MAIN_LOCK((P))
 
@@ -312,7 +312,7 @@ extern int count_instructions;
      PROCESS_MAIN_CHK_LOCKS((_p));					\
      if (((_p)->mbuf) || (MSO(_p).overhead >= BIN_VHEAP_SZ(_p)) ) {	\
        _res = erts_gc_after_bif_call((_p), (_res), NULL, 0);		\
-       E = (_p)->stop;							\
+       E = STACK_TOP((_p));						\
      }									\
      HTOP = HEAP_TOP((_p))
 
@@ -323,7 +323,7 @@ extern int count_instructions;
        _regs[0] = r(0);							\
        _res = erts_gc_after_bif_call((_p), (_res), _regs, (_arity));	\
        r(0) = _regs[0];							\
-       E = (_p)->stop;							\
+       E = STACK_TOP((_p));						\
      }									\
      HTOP = HEAP_TOP((_p))
 #endif
@@ -344,12 +344,48 @@ extern int count_instructions;
  *
  * M is number of live registers to preserve during garbage collection
  */
+#ifdef SEPARATE_STACK
+
+#define HEND   HEAP_END(c_p)
+#define HAVAIL (HEND - HTOP)
+#define SAVAIL (E-STACK_END(c_p))
+//
+// erts_fprintf(stderr, "AH(S=%d,H=%d,M=%d,SS=%d,HS=%d)\n",
+//		   needed, HeapNeed, M, SAVAIL, HAVAIL);
+//
+
+#define AH(StackNeed, HeapNeed, M) \
+    do {				    \
+      int needed;			    \
+      needed = (StackNeed) + 1;		    \
+      if (SAVAIL < needed) {		    \
+	STACK_TOP(c_p) = E;		    \
+	erts_grow_stack(c_p, needed);	    \
+	E = STACK_TOP(c_p);		    \
+      }					    \
+      if (HeapNeed && (HAVAIL < HeapNeed))  {	\
+           SWAPOUT; \
+           reg[0] = r(0); \
+           PROCESS_MAIN_CHK_LOCKS(c_p); \
+           FCALLS -= erts_garbage_collect(c_p, (HeapNeed), reg, (M));	\
+           PROCESS_MAIN_CHK_LOCKS(c_p); \
+           r(0) = reg[0]; \
+           SWAPIN; \
+      }						\
+      STACK_ALLOC(E,needed);			\
+      SAVE_CP(E);				\
+    } while (0)
+#else
+
+#define HEND E
+#define HAVAIL (HEND - HTOP)
+#define SAVAIL (E - HTOP)
 
 #define AH(StackNeed, HeapNeed, M) \
   do { \
      int needed; \
      needed = (StackNeed) + 1; \
-     if (E - HTOP < (needed + (HeapNeed))) { \
+     if (HAVAIL < (needed + (HeapNeed))) { \
            SWAPOUT; \
            reg[0] = r(0); \
            PROCESS_MAIN_CHK_LOCKS(c_p); \
@@ -358,9 +394,11 @@ extern int count_instructions;
            r(0) = reg[0]; \
            SWAPIN; \
      } \
-     E -= needed; \
+     STACK_ALLOC(E,needed);			\
      SAVE_CP(E); \
   } while (0)
+#endif
+
 
 #define Allocate(Ns, Live) AH(Ns, 0, Live)
 
@@ -395,14 +433,13 @@ extern int count_instructions;
 
 #define D(N)             \
      RESTORE_CP(E);      \
-     E += (N) + 1;
-
+     STACK_DEALLOC(E, (N)+1);
 
 
 #define TestBinVHeap(VNh, Nh, Live)                             		\
   do {                                                          		\
     unsigned need = (Nh);                                       		\
-    if ((E - HTOP < need) || (MSO(c_p).overhead + (VNh) >= BIN_VHEAP_SZ(c_p))) {\
+    if ((HAVAIL < need) || (MSO(c_p).overhead + (VNh) >= BIN_VHEAP_SZ(c_p))) { \
        SWAPOUT;                                                 		\
        reg[0] = r(0);                                           		\
        PROCESS_MAIN_CHK_LOCKS(c_p);                             		\
@@ -423,7 +460,7 @@ extern int count_instructions;
 #define TestHeap(Nh, Live)                                      \
   do {                                                          \
     unsigned need = (Nh);                                       \
-    if (E - HTOP < need) {                                      \
+    if (HAVAIL < need) {                                    \
        SWAPOUT;                                                 \
        reg[0] = r(0);                                           \
        PROCESS_MAIN_CHK_LOCKS(c_p);                             \
@@ -443,7 +480,7 @@ extern int count_instructions;
 #define TestHeapPreserve(Nh, Live, Extra)				\
   do {									\
     unsigned need = (Nh);						\
-    if (E - HTOP < need) {						\
+    if (HAVAIL < need) {						\
        SWAPOUT;								\
        reg[0] = r(0);							\
        reg[Live] = Extra;						\
@@ -1350,7 +1387,7 @@ void process_main(void)
      words = Arg(0);
      cp = E[0];
      PreFetch(1, next);
-     E += words;
+     STACK_DEALLOC(E, words);
      E[0] = cp;
      NextPF(1, next);
  }
@@ -1486,7 +1523,7 @@ void process_main(void)
 		 SWAPIN;
 	     }
 	     /* only x(2) is included in the rootset here */
-	     if (E - HTOP < 3 || c_p->mbuf) {	/* Force GC in case add_stacktrace()
+	     if (HAVAIL < 3 || c_p->mbuf) {	/* Force GC in case add_stacktrace()
 						 * created heap fragments */
 		 SWAPOUT;
 		 PROCESS_MAIN_CHK_LOCKS(c_p);
@@ -1570,7 +1607,7 @@ void process_main(void)
 	 }
 #endif
      }
-     ErtsMoveMsgAttachmentIntoProc(msgp, c_p, E, HTOP, FCALLS,
+     ErtsMoveMsgAttachmentIntoProc(msgp, c_p, HEND, HTOP, FCALLS,
 				   {
 				       SWAPOUT;
 				       reg[0] = r(0);
@@ -2050,7 +2087,7 @@ void process_main(void)
 	/*
 	 * Error handling.  SWAPOUT is not needed because it was done above.
 	 */
-	ASSERT(c_p->stop == E);
+	ASSERT(STACK_TOP(c_p) == E);
 	reg[0] = r(0);
 	I = handle_error(c_p, I, reg, bf);
 	goto post_error_handling;
@@ -2085,7 +2122,7 @@ void process_main(void)
 	/*
 	 * Error handling.  SWAPOUT is not needed because it was done above.
 	 */
-	ASSERT(c_p->stop == E);
+	ASSERT(STACK_TOP(c_p) == E);
 	reg[0] = r(0);
 	I = handle_error(c_p, I, reg, bf);
 	goto post_error_handling;
@@ -2122,7 +2159,7 @@ void process_main(void)
 	/*
 	 * Error handling.  SWAPOUT is not needed because it was done above.
 	 */
-	ASSERT(c_p->stop == E);
+	ASSERT(STACK_TOP(c_p) == E);
 	reg[0] = r(0);
 	I = handle_error(c_p, I, reg, bf);
 	goto post_error_handling;
@@ -2164,7 +2201,7 @@ void process_main(void)
 	/*
 	 * Error handling.  SWAPOUT is not needed because it was done above.
 	 */
-	ASSERT(c_p->stop == E);
+	ASSERT(STACK_TOP(c_p) == E);
 	reg[0] = r(0);
 	I = handle_error(c_p, I, reg, bf);
 	goto post_error_handling;
@@ -3699,7 +3736,7 @@ void process_main(void)
 	     TestHeapPreserve(wordsneeded, live, tmp_arg1);
 	     HEAP_TOP(c_p) = HTOP;
 #ifdef DEBUG
-	     c_p->stop = E;	/* Needed for checking in HeapOnlyAlloc(). */
+	     STACK_TOP(c_p) = E;  /* Needed for checking in HeapOnlyAlloc(). */
 #endif
 	     result = erts_bs_start_match_2(c_p, tmp_arg1, slots);
 	     HTOP = HEAP_TOP(c_p);
@@ -4232,17 +4269,24 @@ void process_main(void)
 	 SWAPIN;
 	 
 	 if (flags & MATCH_SET_RX_TRACE) {
-	     ASSERT(c_p->htop <= E && E <= c_p->hend);
-	     if (E - 3 < HTOP) {
+	     // SEPARATE_STACK: FIXME
+	     // ASSERT(c_p->htop <= E && E <= c_p->hend);
+	     if (SAVAIL < 3) {
+#ifdef SEPARATE_STACK
+		 STACK_TOP(c_p) = E;
+		 erts_grow_stack(c_p, 3);
+		 E = STACK_TOP(c_p);
+#else
 		 /* SWAPOUT, SWAPIN was done and r(0) was saved above */
 		 PROCESS_MAIN_CHK_LOCKS(c_p);
 		 FCALLS -= erts_garbage_collect(c_p, 3, reg, ep->code[2]);
 		 PROCESS_MAIN_CHK_LOCKS(c_p);
 		 r(0) = reg[0];
 		 SWAPIN;
+#endif
 	     }
-	     E -= 3;
-	     ASSERT(c_p->htop <= E && E <= c_p->hend);
+	     STACK_ALLOC(E,3);
+//	     ASSERT(c_p->htop <= E && E <= c_p->hend);
 	     ASSERT(is_CP((Eterm)(ep->code)));
 	     ASSERT(is_internal_pid(c_p->tracer_proc) || 
 		    is_internal_port(c_p->tracer_proc));
@@ -4271,7 +4315,7 @@ void process_main(void)
      SWAPIN;
      c_p->cp = NULL;
      SET_I((Eterm *) E[2]);
-     E += 3;
+     STACK_DEALLOC(E, 3);
      Goto(*I);
  }
 
@@ -4350,24 +4394,31 @@ void process_main(void)
 	 need += 3;
      }
      if (need) {
-	 ASSERT(c_p->htop <= E && E <= c_p->hend);
-	 if (E - need < HTOP) {
+	 // SEPARATE_STACK: FIXME
+	 // ASSERT(c_p->htop <= E && E <= c_p->hend);
+	 if (SAVAIL < need) {
+#ifdef SEPARATE_STACK
+	     STACK_TOP(c_p) = E;
+	     erts_grow_stack(c_p, need);
+	     E = STACK_TOP(c_p);
+#else
 	     /* SWAPOUT was done and r(0) was saved above */
 	     PROCESS_MAIN_CHK_LOCKS(c_p);
 	     FCALLS -= erts_garbage_collect(c_p, need, reg, I[-1]);
 	     PROCESS_MAIN_CHK_LOCKS(c_p);
 	     r(0) = reg[0];
 	     SWAPIN;
+#endif
 	 }
      }
      if ((flags & MATCH_SET_RETURN_TO_TRACE) && !return_to_trace) {
-	 E -= 1;
+	 STACK_ALLOC(E,1);
 	 ASSERT(c_p->htop <= E && E <= c_p->hend);
 	 E[0] = make_cp(c_p->cp);
 	 c_p->cp = (Eterm *) make_cp(beam_return_to_trace);
      }
      if (flags & MATCH_SET_RX_TRACE) {
-	 E -= 3;
+	 STACK_ALLOC(E, 3);
 	 ASSERT(c_p->htop <= E && E <= c_p->hend);
 	 ASSERT(is_CP((Eterm) (I - 3)));
 	 ASSERT(am_true == tracer_pid || 
@@ -4407,7 +4458,7 @@ void process_main(void)
      }
      c_p->cp = NULL;
      SET_I((Eterm *) E[0]);
-     E += 1;
+     STACK_DEALLOC(E, 1);
      Goto(*I);
  }
 
@@ -5041,7 +5092,7 @@ next_catch(Process* c_p, Eterm *reg) {
     Eterm *ptr, *prev, *return_to_trace_ptr = NULL;
     Uint i_return_trace = beam_return_trace[0];
     Uint i_return_to_trace = beam_return_to_trace[0];
-    ptr = prev = c_p->stop;
+    ptr = prev = STACK_TOP(c_p);
     ASSERT(is_CP(*ptr));
     ASSERT(ptr <= STACK_START(c_p));
     if (ptr == STACK_START(c_p)) return NULL;
@@ -5101,7 +5152,7 @@ next_catch(Process* c_p, Eterm *reg) {
     
  found_catch:
     ASSERT(ptr < STACK_START(c_p));
-    c_p->stop = prev;
+    STACK_TOP(c_p) = prev;
     if (IS_TRACED_FL(c_p, F_TRACE_RETURN_TO) && return_to_trace_ptr) {
 	/* The stackframe closest to the catch contained an
 	 * return_to_trace entry, so since the execution now
@@ -5310,7 +5361,7 @@ save_stacktrace(Process* c_p, Eterm* pc, Eterm* reg, BifFunction bf,
 	 * 
 	 * Skip trace stack frames.
 	 */
-	ptr = c_p->stop;
+	ptr = STACK_TOP(c_p);
 	if (ptr < STACK_START(c_p) 
 	    && (is_not_CP(*ptr)|| (*cp_val(*ptr) != i_return_trace &&
 				   *cp_val(*ptr) != i_return_to_trace))
@@ -5817,7 +5868,7 @@ hibernate(Process* c_p, Eterm module, Eterm function, Eterm args, Eterm* reg)
     c_p->arg_reg[0] = module;
     c_p->arg_reg[1] = function;
     c_p->arg_reg[2] = args;
-    c_p->stop = STACK_START(c_p);
+    STACK_TOP(c_p) = STACK_START(c_p);
     c_p->catches = 0;
     c_p->i = beam_apply;
     c_p->cp = (Eterm *) beam_apply+1;

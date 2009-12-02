@@ -1268,7 +1268,7 @@ erts_bs_append(Process* c_p, Eterm* reg, Uint live, Eterm build_size_term,
      */
     reg[live] = sb->orig;
     heap_need = ERL_SUB_BIN_SIZE + extra_words;
-    if (c_p->stop - c_p->htop < heap_need) {
+    if (HEAP_AVAIL(c_p) < heap_need) {
 	(void) erts_garbage_collect(c_p, heap_need, reg, live+1);
     }
     sb = (ErlSubBin *) c_p->htop;
@@ -1301,7 +1301,7 @@ erts_bs_append(Process* c_p, Eterm* reg, Uint live, Eterm build_size_term,
 	 * Allocate heap space.
 	 */
 	heap_need = PROC_BIN_SIZE + ERL_SUB_BIN_SIZE + extra_words;
-	if (c_p->stop - c_p->htop < heap_need) {
+	if (HEAP_AVAIL(c_p) < heap_need) {
 	    (void) erts_garbage_collect(c_p, heap_need, reg, live+1);
 	    bin = reg[live];
 	}
@@ -1486,7 +1486,7 @@ erts_bs_init_writable(Process* p, Eterm sz)
      * Allocate heap space.
      */
     heap_need = PROC_BIN_SIZE + ERL_SUB_BIN_SIZE;
-    if (p->stop - p->htop < heap_need) {
+    if (HEAP_AVAIL(p) < heap_need) {
 	(void) erts_garbage_collect(p, heap_need, NULL, 0);
     }
     hp = p->htop;

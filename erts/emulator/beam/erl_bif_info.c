@@ -104,6 +104,13 @@ static char erts_system_version[] = ("Erlang " ERLANG_OTP_RELEASE
 #ifdef VALGRIND
 				     " [valgrind-compiled]"
 #endif
+#ifdef SEPARATE_STACK
+#ifdef STACK_DIRECTION_UP
+				     " [separate-stack-]"
+#else
+				     " [separate-stack+]"
+#endif
+#endif
 				     "\n");
 
 #define ASIZE(a) (sizeof(a)/sizeof(a[0]))
@@ -1349,9 +1356,13 @@ process_info_aux(Process *BIF_P,
 
     case am_heap_size: {
 	Uint hsz = 3;
-	(void) erts_bld_uint(NULL, &hsz, HEAP_SIZE(rp));
+	Uint heap_size = HEAP_SIZE(rp);
+#ifdef SEPARATE_STACK
+	heap_size += STACK_SIZE(rp);  // Ok?
+#endif
+	(void) erts_bld_uint(NULL, &hsz, heap_size);
 	hp = HAlloc(BIF_P, hsz);
-	res = erts_bld_uint(&hp, NULL, HEAP_SIZE(rp));
+	res = erts_bld_uint(&hp, NULL, heap_size);
 	break;
     }
 
@@ -1360,7 +1371,10 @@ process_info_aux(Process *BIF_P,
 	Uint total_heap_size;
 	Uint hsz = 3;
 
-	total_heap_size = rp->heap_sz;
+	total_heap_size = HEAP_SIZE(rp);
+#ifdef SEPARATE_STACK
+	total_heap_size += STACK_SIZE(rp);
+#endif
 	if (rp->old_hend && rp->old_heap)
 	    total_heap_size += rp->old_hend - rp->old_heap;
 
@@ -1379,7 +1393,7 @@ process_info_aux(Process *BIF_P,
     }
 
     case am_stack_size: {
-	Uint stack_size = STACK_START(rp) - rp->stop;
+	Uint stack_size = STACK_USED(rp);
 	Uint hsz = 3;
 	(void) erts_bld_uint(NULL, &hsz, stack_size);
 	hp = HAlloc(BIF_P, hsz);
@@ -2316,6 +2330,12 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
 	BIF_RET(buf_to_intlist(&hp, buf, n, NIL));
     } else if (ERTS_IS_ATOM_STR("smp_support", BIF_ARG_1)) {
 #ifdef ERTS_SMP
+	BIF_RET(am_true);
+#else
+	BIF_RET(am_false);
+#endif
+    } else if (ERTS_IS_ATOM_STR("separate_stack", BIF_ARG_1)) {
+#ifdef SEPARATE_STACK
 	BIF_RET(am_true);
 #else
 	BIF_RET(am_false);

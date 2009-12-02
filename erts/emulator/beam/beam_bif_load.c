@@ -432,7 +432,7 @@ check_process_code(Process* rp, Module* modp)
     /*
      * Check all continuation pointers stored on the stack.
      */
-    for (sp = rp->stop; sp < STACK_START(rp); sp++) {
+    for (sp = STACK_TOP(rp); sp < STACK_START(rp); sp++) {
 	if (is_CP(*sp) && INSIDE(cp_val(*sp))) {
 	    return am_true;
 	}
@@ -509,10 +509,10 @@ check_process_code(Process* rp, Module* modp)
 	    rp->fvalue = NIL;
 	    rp->ftrace = NIL;
 	}
-	if (any_heap_ref_ptrs(rp->stop, rp->hend, mod_start, mod_size)) {
+	if (any_heap_ref_ptrs(STACK_TOP(rp), STACK_START(rp), mod_start, mod_size)) {
 	    goto need_gc;
 	}
-	if (any_heap_refs(rp->heap, rp->htop, mod_start, mod_size)) {
+	if (any_heap_refs(HEAP_START(rp), HEAP_TOP(rp), mod_start, mod_size)) {
 	    goto need_gc;
 	}
 

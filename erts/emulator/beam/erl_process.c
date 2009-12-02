@@ -6633,6 +6633,9 @@ erl_create_process(Process* parent, /* Parent of process (default group leader).
     Uint sz;			/* Needed words on heap. */
     Uint heap_need;		/* Size needed on heap. */
     Eterm res = THE_NON_VALUE;
+#ifdef SEPARATE_STACK
+    Uint ssz;
+#endif
 
 #ifdef ERTS_SMP
     erts_smp_proc_lock(parent, ERTS_PROC_LOCKS_ALL_MINOR);
@@ -6716,6 +6719,9 @@ erl_create_process(Process* parent, /* Parent of process (default group leader).
     } else {
 	sz = erts_next_heap_size(heap_need, 0);
     }
+#ifdef SEPARATE_STACK
+    ssz = sz;  // FIXME!!!
+#endif
 
 #ifdef HIPE
     hipe_init_process(&p->hipe);
@@ -6731,9 +6737,16 @@ erl_create_process(Process* parent, /* Parent of process (default group leader).
     p->scan_top = p->high_water;
 #endif
     p->gen_gcs = 0;
-    p->stop = p->hend = p->heap + sz;
-    p->htop = p->heap;
-    p->heap_sz = sz;
+    HEAP_END(p)  = HEAP_START(p) + sz;
+#ifdef SEPARATE_STACK
+    p->s_base = (Eterm *) ERTS_HEAP_ALLOC(ERTS_ALC_T_HEAP, sizeof(Eterm)*ssz);
+    p->s_end = p->s_base + ssz;
+    STACK_SIZE(p) = ssz;
+#endif
+    // when NOT SEPARATE_STACK then START_START(p) == HEAP_END(p)!
+    STACK_TOP(p) = STACK_START(p);
+    HEAP_TOP(p) = HEAP_START(p);
+    HEAP_SIZE(p) = sz;
     p->catches = 0;
 
     p->bin_vheap_sz = H_MIN_SIZE;
@@ -6962,10 +6975,15 @@ erl_create_process(Process* parent, /* Parent of process (default group leader).
 
 void erts_init_empty_process(Process *p)
 {
-    p->htop = NULL;
-    p->stop = NULL;
-    p->hend = NULL;
-    p->heap = NULL;
+    HEAP_TOP(p) = NULL;
+    STACK_TOP(p) = NULL;
+    HEAP_END(p) = NULL;
+    HEAP_START(p) = NULL;
+#ifdef SEPARATE_STACK
+    STACK_END(p) = NULL;
+    STACK_START(p) = NULL;
+    STACK_SIZE(p) = 0;
+#endif
     p->gen_gcs = 0;
     p->max_gen_gcs = 0;
     p->min_heap_size = 0;
@@ -7101,17 +7119,22 @@ void
 erts_debug_verify_clean_empty_process(Process* p)
 {
     /* Things that erts_cleanup_empty_process() will *not* cleanup... */
-    ASSERT(p->htop == NULL);
-    ASSERT(p->stop == NULL);
-    ASSERT(p->hend == NULL);
-    ASSERT(p->heap == NULL);
+    ASSERT(HEAP_TOP(p) == NULL);
+    ASSERT(STACK_TOP(p) == NULL);
+    ASSERT(HEAP_END(p) == NULL);
+    ASSERT(HEAP_START(p) == NULL);
+#ifdef SEPARATE_STACK  // May work without #ifdef except for STACK_SIZE!
+    ASSERT(STACK_END(p) == NULL);
+    ASSERT(STACK_START(p) == NULL);
+    ASSERT(STACK_SIZE(p) == 0);
+#endif
     ASSERT(p->id == ERTS_INVALID_PID);
     ASSERT(p->tracer_proc == NIL);
     ASSERT(p->trace_flags == F_INITIAL_TRACE_FLAGS);
     ASSERT(p->group_leader == ERTS_INVALID_PID);
     ASSERT(p->next == NULL);
     ASSERT(p->reg == NULL);
-    ASSERT(p->heap_sz == 0);
+    ASSERT(HEAP_SIZE(p) == 0);
     ASSERT(p->high_water == NULL);
 #ifdef INCREMENTAL
     ASSERT(p->scan_top == NULL);
@@ -8323,7 +8346,7 @@ erts_stack_dump(int to, void *to_arg, Process *p)
 	return;
     }
     erts_program_counter_info(to, to_arg, p);
-    for (sp = p->stop; sp < STACK_START(p); sp++) {
+    for (sp = STACK_TOP(p); sp < STACK_START(p); sp++) {
         yreg = stack_element_dump(to, to_arg, p, sp, yreg);
     }
 }

@@ -450,15 +450,45 @@ struct ErtsPendingSuspend_ {
 
 #endif
 
+// Default is same direction as stack+heap combined
+#ifdef SEPARATE_STACK
+#define STACK_DIRECTION_UP
+#endif
+
 /* Defines to ease the change of memory architecture */
-#  define HEAP_START(p)     (p)->heap
-#  define HEAP_TOP(p)       (p)->htop
-#  define HEAP_LIMIT(p)     (p)->stop
-#  define HEAP_END(p)       (p)->hend
-#  define HEAP_SIZE(p)      (p)->heap_sz
-#  define STACK_START(p)    (p)->hend
-#  define STACK_TOP(p)      (p)->stop
-#  define STACK_END(p)      (p)->htop
+#  define HEAP_START(p)      (p)->heap
+#  define HEAP_TOP(p)        (p)->htop
+#  define HEAP_END(p)        (p)->hend
+#  define HEAP_SIZE(p)       (p)->heap_sz
+#  define STACK_TOP(p)       (p)->stop
+#ifdef SEPARATE_STACK
+#  define HEAP_LIMIT(p)      (p)->hend
+#  define STACK_BASE(p)      (p)->s_base
+#  define STACK_SIZE(p)      (p)->stack_sz
+#ifdef STACK_DIRECTION_UP
+#  define STACK_START(p)     (p)->s_end
+#  define STACK_END(p)       (p)->s_base
+#  define STACK_ALLOC(t,n)   (t) -= (n)
+#  define STACK_DEALLOC(t,n) (t) += (n)
+#  define STACK_NEXT(t,n)    (t) += (n)
+#else  // STACK_DIRECTION_DOWN
+#  define STACK_START(p)     (p)->s_base
+#  define STACK_END(p)       (p)->s_end
+#  define STACK_ALLOC(t,n)   (t) += (n)
+#  define STACK_DEALLOC(t,n) (t) -= (n)
+#  define STACK_NEXT(t,n)    (t) -= (n)
+#endif
+#else
+#  define HEAP_LIMIT(p)      (p)->stop
+#  define STACK_START(p)     (p)->hend
+#  define STACK_END(p)       (p)->htop
+#  define STACK_ALLOC(t,n)   (t) -= (n)
+#  define STACK_DEALLOC(t,n) (t) += (n)
+#  define STACK_NEXT(t,n)    (t) += (n)
+#endif
+#  define HEAP_AVAIL(p)     (HEAP_LIMIT((p))-HEAP_TOP((p)))
+#  define STACK_AVAIL(p)    (STACK_TOP((p))-STACK_END(p))
+#  define STACK_USED(p)     (STACK_START((p)) - STACK_TOP((p)))
 #  define HIGH_WATER(p)     (p)->high_water
 #  define OLD_HEND(p)       (p)->old_hend
 #  define OLD_HTOP(p)       (p)->old_htop
@@ -649,6 +679,14 @@ struct process {
 				 * heap fragments.
 				 */
 #endif
+
+#ifdef SEPARATE_STACK
+    // Stack and heap are separate so we need more info
+    Eterm* s_base;              // Stack memory
+    Eterm* s_end;               // = stack + stack_sz
+    Uint   stack_sz;            // Size of stack in words
+#endif
+
 };
 
 #ifdef CHECK_FOR_HOLES

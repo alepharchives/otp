@@ -349,10 +349,10 @@ print_garb_info(int to, void *to_arg, Process* p)
 {
     /* ERTS_SMP: A scheduler is probably concurrently doing gc... */
 #ifndef ERTS_SMP
-    erts_print(to, to_arg, "New heap start: %bpX\n", p->heap);
-    erts_print(to, to_arg, "New heap top: %bpX\n", p->htop);
-    erts_print(to, to_arg, "Stack top: %bpX\n", p->stop);
-    erts_print(to, to_arg, "Stack end: %bpX\n", p->hend);
+    erts_print(to, to_arg, "New heap start: %bpX\n", HEAP_START(p));
+    erts_print(to, to_arg, "New heap top: %bpX\n", HEAP_TOP(p));
+    erts_print(to, to_arg, "Stack top: %bpX\n", STACK_TOP(p));
+    erts_print(to, to_arg, "Stack end: %bpX\n", STACK_START(p)); // Yes START!
     erts_print(to, to_arg, "Old heap start: %bpX\n", OLD_HEAP(p));
     erts_print(to, to_arg, "Old heap top: %bpX\n", OLD_HTOP(p));
     erts_print(to, to_arg, "Old heap end: %bpX\n", OLD_HEND(p));
