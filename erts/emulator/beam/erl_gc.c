@@ -365,7 +365,7 @@ erts_gc_after_bif_call(Process* p, Eterm result, Eterm* regs, Uint arity)
 //
 int erts_change_stack_size(Process* p, Uint new_sz)
 {
-    Eterm* new_stack;
+    ErlStack* new_stack;
 
     ASSERT(STACK_TOP(p) >= STACK_END(p));
 
@@ -381,38 +381,36 @@ int erts_change_stack_size(Process* p, Uint new_sz)
 	
 	if (new_sz > STACK_SIZE(p)) {
 	    // Move stack after resize
-	    new_stack = (Eterm *) ERTS_HEAP_REALLOC(ERTS_ALC_T_HEAP,
-						    (void *) p->s_base,
-						    sizeof(Eterm)*(STACK_SIZE(p)),
-						    sizeof(Eterm)*new_sz);
-	    sys_memmove(new_stack+new_avail_size, new_stack+old_avail_size,
+	    new_stack = erl_stack_realloc(p->stack, new_sz);
+	    sys_memmove(new_stack->s_base+new_avail_size, 
+			new_stack->s_base+old_avail_size,
 			used_size*sizeof(Eterm));
 	}
 	else {
 	    // Move stack before resize
-	    sys_memmove(STACK_END(p)+new_avail_size, STACK_END(p)+old_avail_size,
+	    sys_memmove(p->s_base+new_avail_size, 
+			p->s_base+old_avail_size,
 			used_size*sizeof(Eterm));
-	    new_stack = (Eterm *) ERTS_HEAP_REALLOC(ERTS_ALC_T_HEAP,
-						    (void *) p->s_base,
-						    sizeof(Eterm)*(STACK_SIZE(p)),
-						    sizeof(Eterm)*new_sz);
+	    new_stack = erl_stack_realloc(p->stack, new_sz);
 	}
-	STACK_TOP(p)   = new_stack + new_avail_size;
+	STACK_TOP(p) = new_stack->s_base+new_avail_size;
     }
 #else
     {
 	int stop_offset = STACK_TOP(p) - STACK_BASE(p);
-	new_stack = (Eterm *) ERTS_HEAP_REALLOC(ERTS_ALC_T_HEAP,
-						(void *) p->s_base,
-						sizeof(Eterm)*(STACK_SIZE(p)),
-						sizeof(Eterm)*new_sz);
-	STACK_TOP(p) = new_stack + stop_offset;
+	new_stack = erl_stack_realloc(p, p->stack, new_sz);
+	STACK_TOP(p) = new_stack->s_base + stop_offset;
     }
 #endif
-    p->s_base      = new_stack;
-    p->s_end       = new_stack + new_sz;
-    STACK_SIZE(p)  = new_sz;
-    return new_sz;
+
+#ifdef FIBER
+    p->fiber_hd->stack = new_stack;  // inform the owner!
+#endif
+    p->stack       = new_stack;      // keep a copy
+    p->s_base      = new_stack->s_base;
+    p->s_end       = p->s_base + new_stack->s_size;
+
+    return new_stack->s_size;
 }
 
 int erts_grow_stack(Process* p, int need)
@@ -644,7 +642,7 @@ erts_garbage_collect_hibernate(Process* p)
      * hibernated.
      */
 
-    ASSERT(STACK_START(p) - STACK_TOP(p) == 0); /* Empty stack */
+    ASSERT(STACK_USED(p) == 0); /* Empty stack */
     ASSERT(actual_size < p->heap_sz);
 
     heap = ERTS_HEAP_ALLOC(ERTS_ALC_T_HEAP, sizeof(Eterm)*heap_size);
@@ -656,6 +654,7 @@ erts_garbage_collect_hibernate(Process* p)
     STACK_TOP(p) = STACK_START(p);  // SEPARATE_STACK: working anyway?
 #endif
     // SEPARATE_STACK: kill stack completly?
+    // FIBER: clean up fibers
 
     offs = heap - p->heap;
     area = (char *) p->heap;
@@ -1158,7 +1157,7 @@ do_minor(Process *p, int new_sz, Eterm* objv, int nobj)
 
     /* Copy stack to end of new heap */
 #ifndef SEPARATE_STACK
-    n = STACK_START(p) - STACK_TOP(p);
+    n = STACK_USED(p);
     sys_memcpy(n_heap + new_sz - n, STACK_TOP(p), n * sizeof(Eterm));
     STACK_TOP(p) = n_heap + new_sz - n;
 #endif
@@ -1387,7 +1386,7 @@ major_collection(Process* p, int need, Eterm* objv, int nobj, Uint *recl)
 
     /* Move the stack to the end of the heap */
 #ifndef SEPARATE_STACK
-    n = STACK_START(p) - STACK_TOP(p);
+    n = STACK_USED(p);
     sys_memcpy(n_heap + new_sz - n, STACK_TOP(p), n * sizeof(Eterm));
     STACK_TOP(p) = n_heap + new_sz - n;
 #endif
@@ -1937,7 +1936,7 @@ collect_heap_frags(Process* p, Eterm* n_hstart, Eterm* n_htop,
      * or process dictionary.
      */
 #ifdef HARDDEBUG
-    disallow_heap_frag_ref(p, n_htop, STACK_TOP(p), STACK_START(p)-STACK_TOP(p));
+    disallow_heap_frag_ref(p, n_htop, STACK_TOP(p), STACK_USED(p));
     if (p->dictionary != NULL) {
 	disallow_heap_frag_ref(p, n_htop, p->dictionary->data, p->dictionary->used);
     }
@@ -2004,95 +2003,92 @@ collect_heap_frags(Process* p, Eterm* n_hstart, Eterm* n_htop,
     return n_htop;
 }
 
+static void push_root(Eterm* v, Uint sz, Uint i, Rootset* rootset)
+{
+    if (i == rootset->size) {
+	Roots* roots;
+	Uint new_size = 2*rootset->size;
+	if (rootset->roots == rootset->def) {
+	    roots = erts_alloc(ERTS_ALC_T_ROOTSET,
+			       new_size*sizeof(Roots));
+	    sys_memcpy(roots, rootset->def, sizeof(rootset->def));
+	} else {
+	    roots = erts_realloc(ERTS_ALC_T_ROOTSET,
+				 (void *) rootset->roots,
+				 new_size*sizeof(Roots));
+	}
+	rootset->roots = roots;
+	rootset->size = new_size;
+    }
+    rootset->roots[i].v = v;
+    rootset->roots[i].sz = sz;
+}
+
 static Uint
 setup_rootset(Process *p, Eterm *objv, int nobj, Rootset *rootset)
 {
-    Uint avail;
-    Roots* roots;
     ErlMessage* mp;
     Uint n;
 
     n = 0;
-    roots = rootset->roots = rootset->def;
+    rootset->roots = rootset->def;
     rootset->size = ALENGTH(rootset->def);
+    rootset->num_roots = 0;
 
-    roots[n].v  = STACK_TOP(p);
-    roots[n].sz = STACK_START(p) - STACK_TOP(p);
-    ++n;
-
-    if (p->dictionary != NULL) {
-        roots[n].v = p->dictionary->data;
-        roots[n].sz = p->dictionary->used;
-        ++n;
+    // install current stack
+    push_root(STACK_TOP(p), STACK_USED(p), n++, rootset);
+#ifdef FIBER
+    {
+	ErlFiber* fp = p->fiber_hd;
+	if (!is_pid(fp->id))
+	    push_root(&fp->id, 1, n++, rootset);
+	fp = fp->next;
+	while(fp) {
+	    push_root(fp->s_top,
+		      fp->stack->s_size-(fp->s_top-fp->stack->s_base),
+		      n++,rootset);
+	    if (!is_pid(fp->id))
+		push_root(&fp->id, 1, n++, rootset);
+	    fp = fp->next;
+	}
     }
-    if (nobj > 0) {
-        roots[n].v  = objv;
-        roots[n].sz = nobj;
-        ++n;
-    }
+#endif
+    if (p->dictionary != NULL)
+	push_root(p->dictionary->data,p->dictionary->used,n++,rootset);
+    if (nobj > 0)
+	push_root(objv,nobj,n++,rootset);
 
     ASSERT((is_nil(p->seq_trace_token) ||
 	    is_tuple(p->seq_trace_token) ||
 	    is_atom(p->seq_trace_token)));
-    if (is_not_immed(p->seq_trace_token)) {
-	roots[n].v = &p->seq_trace_token;
-	roots[n].sz = 1;
-	n++;
-    }
+
+    if (is_not_immed(p->seq_trace_token))
+	push_root(&p->seq_trace_token,1,n++,rootset);
 
     ASSERT(is_nil(p->tracer_proc) ||
 	   is_internal_pid(p->tracer_proc) ||
 	   is_internal_port(p->tracer_proc));
 
     ASSERT(is_pid(p->group_leader));
-    if (is_not_immed(p->group_leader)) {
-	roots[n].v  = &p->group_leader;
-	roots[n].sz = 1;
-	n++;
-    }
+    if (is_not_immed(p->group_leader))
+	push_root(&p->group_leader,1,n++,rootset);
 
     /*
      * The process may be garbage-collected while it is terminating.
      * (fvalue contains the EXIT reason and ftrace the saved stack trace.)
      */
-    if (is_not_immed(p->fvalue)) {
-	roots[n].v  = &p->fvalue;
-	roots[n].sz = 1;
-	n++;
-    }
-    if (is_not_immed(p->ftrace)) {
-	roots[n].v  = &p->ftrace;
-	roots[n].sz = 1;
-	n++;
-    }
-    ASSERT(n <= rootset->size);
+    if (is_not_immed(p->fvalue))
+	push_root(&p->fvalue,1,n++,rootset);
+
+    if (is_not_immed(p->ftrace)) 
+	push_root(&p->ftrace,1,n++,rootset);
 
     mp = p->msg.first;
-    avail = rootset->size - n;
     while (mp != NULL) {
-	if (avail == 0) {
-	    Uint new_size = 2*rootset->size;
-	    if (roots == rootset->def) {
-		roots = erts_alloc(ERTS_ALC_T_ROOTSET,
-				   new_size*sizeof(Roots));
-		sys_memcpy(roots, rootset->def, sizeof(rootset->def));
-	    } else {
-		roots = erts_realloc(ERTS_ALC_T_ROOTSET,
-				     (void *) roots,
-				     new_size*sizeof(Roots));
-	    }
-	    rootset->size = new_size;
-	    avail = new_size - n;
-	}
-	if (mp->data.attached == NULL) {
-	    roots[n].v = mp->m;
-	    roots[n].sz = 2;
-	    n++;
-	    avail--;
-	}
+	if (mp->data.attached == NULL)
+	    push_root(mp->m,2,n++,rootset);
         mp = mp->next;
     }
-    rootset->roots = roots;
     rootset->num_roots = n;
     return n;
 }
@@ -2652,7 +2648,7 @@ offset_one_rootset(Process *p, Sint offs, char* area, Uint area_size,
     offset_heap_ptr(&p->seq_trace_token, 1, offs, area, area_size);
     offset_heap_ptr(&p->group_leader, 1, offs, area, area_size);
     offset_mqueue(p, offs, area, area_size);
-    offset_heap_ptr(STACK_TOP(p), (STACK_START(p) - STACK_TOP(p)),
+    offset_heap_ptr(STACK_TOP(p), STACK_USED(p),
 		    offs, area, area_size);
     offset_nstack(p, offs, area, area_size);
     if (nobj > 0) {

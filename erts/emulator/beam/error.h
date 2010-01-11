@@ -146,7 +146,7 @@
  * Internal pseudo-error codes.
  */
 #define TRAP		(1 << 8)	/* BIF Trap to erlang code */
-
+#define SWITCH          (2 << 8)   /* switch to next executing fiber */
 /*
  * Aliases for some common exit codes.
  */

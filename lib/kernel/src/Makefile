@@ -116,7 +116,8 @@ MODULES = \
 	user \
 	user_drv \
 	user_sup \
-	wrap_log_reader
+	wrap_log_reader \
+	fiber
 
 HRL_FILES= ../include/file.hrl ../include/inet.hrl ../include/inet_sctp.hrl
 INTERNAL_HRL_FILES= application_master.hrl disk_log.hrl \

@@ -95,6 +95,10 @@ extern Eterm beam_apply[];
 extern Eterm beam_exit[];
 extern Eterm beam_continue_exit[];
 
+#ifdef FIBER
+extern Eterm fiber_apply[];
+#endif
+
 static Sint p_last;
 static Sint p_next;
 static Sint p_serial;
@@ -6617,6 +6621,182 @@ alloc_process(void)
 
 }
 
+#ifdef SEPARATE_STACK
+
+ErlStack* erl_stack_alloc(Uint size)
+{
+    ErlStack* ptr;
+    ptr = (ErlStack*) ERTS_HEAP_ALLOC(ERTS_ALC_T_HEAP, 
+				      sizeof(ErlStack)+sizeof(Eterm)*size);
+    ptr->s_size = size;
+    return ptr;
+}
+
+ErlStack* erl_stack_realloc(ErlStack* stack, Uint size)
+{
+    ErlStack* ptr;
+    ptr = (ErlStack*) ERTS_HEAP_REALLOC(ERTS_ALC_T_HEAP,
+					(void *) stack,
+					sizeof(ErlStack)+(sizeof(Eterm)*stack->s_size),
+					sizeof(ErlStack)+(sizeof(Eterm)*size));
+    ptr->s_size = size;
+    return ptr;
+}
+
+void erl_stack_free(ErlStack* stack)
+{
+    ERTS_HEAP_FREE(ERTS_ALC_T_HEAP, (void*) stack, 
+		   sizeof(ErlStack)+(sizeof(Eterm)*stack->s_size));
+}
+
+#ifdef FIBER
+//
+// Unlink the fiber from the process stack queue
+//
+void erl_fiber_unlink(Process* p, ErlFiber* fiber)
+{
+    ErlFiber* nlink = fiber->next;
+    ErlFiber* plink = fiber->prev;
+
+    if (nlink)
+	nlink->prev = plink;
+    else
+	p->fiber_tl = plink;
+
+    if (plink)
+	plink->next = nlink;
+    else
+	p->fiber_hd = nlink;
+    p->nfibers--;
+}
+//
+// Put fiber last in process fiber list
+// Fiber must NOT be linked.
+//
+void erl_fiber_enq(Process* p, ErlFiber* fiber)
+{
+    ASSERT(p->fiber_tl != 0);
+    p->fiber_tl->next = fiber;
+    fiber->prev = p->fiber_tl;
+    fiber->next = 0;
+    p->fiber_tl = fiber;
+    p->nfibers++;
+}
+
+//
+// Put fiber first in process fiber list
+// Fiber must NOT be linked.
+//
+void erl_fiber_push(Process* p, ErlFiber* fiber)
+{
+    fiber->next = p->fiber_hd;
+    fiber->prev = 0;
+    if (fiber->next)
+	fiber->next->prev = fiber;
+    p->fiber_hd = fiber;
+    if (!p->fiber_tl)
+	p->fiber_tl = fiber;
+    p->nfibers++;
+}
+
+//
+// Unlink and free stack and return the head of stack queue
+//
+void erl_fiber_delete(Process* p, ErlFiber* fiber)
+{
+    erl_fiber_unlink(p, fiber);
+    erl_stack_free(fiber->stack);
+    erts_free(ERTS_ALC_T_FIBER, (void *) fiber);    
+}
+
+void erl_fiber_delete_all(Process* p)
+{
+    ErlFiber* fiber = p->fiber_hd;
+
+    while(fiber) {
+	ErlFiber* np = fiber->next;
+	erl_stack_free(fiber->stack);
+	erts_free(ERTS_ALC_T_FIBER, (void *) fiber);
+	fiber = np;
+    }
+    p->fiber_hd = 0;
+    p->fiber_tl = 0;
+}
+
+#define MIN_FIBER_STACK_SIZE 55
+
+static void erl_fiber_push_args(ErlFiber* fiber, Eterm* icode,
+				Eterm mod, Eterm func, Eterm args)
+{
+    fiber->s_top -= 4;
+    fiber->s_top[0] = make_cp(icode);
+    fiber->s_top[1] = mod;
+    fiber->s_top[2] = func;
+    fiber->s_top[3] = args;
+    fiber->arity = 3;
+}
+
+ErlFiber* erl_fiber_new(Process* p, Eterm id, 
+			Eterm mod, Eterm func, Uint arity, size_t stack_size)
+{
+    ErlFiber* fiber;
+    ErlStack* stack;
+
+    fiber = (ErlFiber*) erts_alloc_fnf(ERTS_ALC_T_FIBER, sizeof(ErlFiber));
+    if (!fiber)
+	return 0;
+    if (stack_size < MIN_FIBER_STACK_SIZE)
+	stack_size = MIN_FIBER_STACK_SIZE;
+    stack = erl_stack_alloc(stack_size);
+	
+    if (!stack) {
+	erts_free(ERTS_ALC_T_FIBER, (void*) fiber);
+	return 0;
+    }
+    fiber->next = 0;
+    fiber->prev = 0;
+    fiber->initial[INITIAL_MOD] = mod;
+    fiber->initial[INITIAL_FUN] = func;
+    fiber->initial[INITIAL_ARI] = arity;
+    fiber->current = fiber->initial+INITIAL_MOD;
+    fiber->id = id;
+    fiber->stack = stack;
+    fiber->s_top = stack->s_base + stack->s_size;
+    fiber->catches = 0;
+    fiber->arity = 0;
+    return fiber;
+}
+
+
+ErlFiber* erl_fiber_create(Process* p, Eterm mod, Eterm func, Eterm args)
+{
+    ErlFiber* fiber;
+    Eterm id;
+    Sint arity;
+    Uint ssz =  MIN_FIBER_STACK_SIZE;
+
+    if (is_not_atom(mod)||is_not_atom(func)||((arity = list_length(args)) < 0))
+	return 0;
+    id = erts_make_ref(p);
+    fiber = erl_fiber_new(p, id, mod, func, (Uint) arity, ssz);
+    erl_fiber_push_args(fiber, fiber_apply, mod, func, args);
+    return fiber;
+}
+
+ErlFiber* erl_fiber_find(Process* p, Eterm id)
+{
+    ErlFiber* ptr = p->fiber_hd;
+    while(ptr) {
+	ErlFiber* next = ptr->next;
+	if (eq(id, ptr->id))
+	    return ptr;
+	ptr = next;
+    }
+    return 0;
+}
+#endif
+#endif
+
 Eterm
 erl_create_process(Process* parent, /* Parent of process (default group leader). */
 		   Eterm mod,	/* Tagged atom for module. */
@@ -6739,9 +6919,16 @@ erl_create_process(Process* parent, /* Parent of process (default group leader).
     p->gen_gcs = 0;
     HEAP_END(p)  = HEAP_START(p) + sz;
 #ifdef SEPARATE_STACK
-    p->s_base = (Eterm *) ERTS_HEAP_ALLOC(ERTS_ALC_T_HEAP, sizeof(Eterm)*ssz);
-    p->s_end = p->s_base + ssz;
-    STACK_SIZE(p) = ssz;
+#ifdef FIBER
+    p->fiber_hd = erl_fiber_new(p, p->id, mod, func, arity, ssz);
+    p->fiber_tl = p->fiber_hd;
+    p->nfibers = 1;
+    p->stack = p->fiber_hd->stack;
+#else
+    p->stack = erl_stack_alloc(ssz);
+#endif
+    p->s_base = p->stack->s_base;
+    p->s_end  = p->s_base + p->stack->s_size;
 #endif
     // when NOT SEPARATE_STACK then START_START(p) == HEAP_END(p)!
     STACK_TOP(p) = STACK_START(p);
@@ -6781,7 +6968,12 @@ erl_create_process(Process* parent, /* Parent of process (default group leader).
     BM_SWAP_TIMER(copy,system);
 #endif
     p->arity = 3;
-
+#ifdef FIBER
+    // We wait to push the arguments until the args is copied to 
+    // to the local process
+    erl_fiber_push_args(p->fiber_hd, beam_apply,
+			p->arg_reg[0],p->arg_reg[1],p->arg_reg[2]);
+#endif
     p->fvalue = NIL;
     p->freason = EXC_NULL;
     p->ftrace = NIL;
@@ -6980,9 +7172,13 @@ void erts_init_empty_process(Process *p)
     HEAP_END(p) = NULL;
     HEAP_START(p) = NULL;
 #ifdef SEPARATE_STACK
+    p->stack = NULL;
     STACK_END(p) = NULL;
     STACK_START(p) = NULL;
-    STACK_SIZE(p) = 0;
+#ifdef FIBER
+    p->fiber_hd = 0;
+    p->fiber_tl = 0;
+#endif
 #endif
     p->gen_gcs = 0;
     p->max_gen_gcs = 0;
@@ -7126,7 +7322,10 @@ erts_debug_verify_clean_empty_process(Process* p)
 #ifdef SEPARATE_STACK  // May work without #ifdef except for STACK_SIZE!
     ASSERT(STACK_END(p) == NULL);
     ASSERT(STACK_START(p) == NULL);
-    ASSERT(STACK_SIZE(p) == 0);
+#ifdef FIBER
+    ASSERT(p->fiber_hd == 0);
+    ASSERT(p->fiber_tl == 0);
+#endif
 #endif
     ASSERT(p->id == ERTS_INVALID_PID);
     ASSERT(p->tracer_proc == NIL);
@@ -7254,6 +7453,15 @@ delete_process(Process* p)
 #endif
 
     ERTS_HEAP_FREE(ERTS_ALC_T_HEAP, (void*) p->heap, p->heap_sz*sizeof(Eterm));
+
+#ifdef SEPARATE_STACK
+#ifdef FIBER
+    erl_fiber_delete_all(p);
+#else
+    erl_stack_free(p->stack);
+#endif
+#endif
+
     if (p->old_heap != NULL) {
 
 #ifdef DEBUG

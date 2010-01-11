@@ -172,11 +172,11 @@ AC_ARG_ENABLE(hipe,
 
 AC_ARG_ENABLE(separate-stack,
 [  --enable-separate-stack  enable separate stack support
-   --disable-separate-stack disable separate stack support],
-[ case "$enableval" in
-    no) enable_separate_stack=no ;;
-    *)  enable_separate_stack=yes ;;
-  esac ], enable_separate_stack=unknown)
+  --disable-separate-stack disable separate stack support])
+
+AC_ARG_ENABLE(fiber,
+[  --enable-fiber           enable fiber support
+  --disable-fiber         disable fiber support])
 
 
 AC_ARG_ENABLE(native-libs,
@@ -2808,11 +2808,25 @@ AC_SUBST(HIPE_ENABLED)
 # Check if we want separate stack support
 #
 SEPARATE_STACK_ENABLED=
-if test X${enable_separate_stack} == Xyes; then
+if test X${enable_separate_stack} = Xyes; then
    SEPARATE_STACK_ENABLED=yes
    AC_DEFINE(SEPARATE_STACK,[1],[Define to enable separate stack])
+   ENABLE_ALLOC_TYPE_VARS="$ENABLE_ALLOC_TYPE_VARS separate_stack"
 fi
 AC_SUBST(SEPARATE_STACK_ENABLED)
+
+#
+# Check if we want fiber support
+#
+FIBER_ENABLED=
+if test X${enable_separate_stack} = Xyes -a X${enable_fiber} = Xyes; then
+   FIBER_ENABLED=yes
+   AC_DEFINE(FIBER,[1],[Define to enable fiber support])
+   ENABLE_ALLOC_TYPE_VARS="$ENABLE_ALLOC_TYPE_VARS fiber"
+elif test X${enable_fiber} = Xyes; then
+      AC_MSG_ERROR(fiber support need --enable-seprate-stack)
+fi
+AC_SUBST(FIBER_ENABLED)
 
 #
 # Check if Erlang libraries should be compiled to native code.

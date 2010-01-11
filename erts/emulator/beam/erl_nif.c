@@ -212,7 +212,7 @@ ERL_NIF_TERM enif_make_badarg(ErlNifEnv* env)
 int enif_get_int(ErlNifEnv* env, Eterm term, int* ip)
 {
 #if SIZEOF_INT == SIZEOF_VOID_P
-    return term_to_Sint(term, ip);
+    return term_to_Sint(term, (Sint*) ip);
 #elif SIZEOF_LONG == SIZEOF_VOID_P
     Sint i;
     if (!term_to_Sint(term, &i) || i < INT_MIN || i > INT_MAX) {

@@ -150,7 +150,11 @@ AC_ARG_ENABLE(hipe,
 
 AC_ARG_ENABLE(separate-stack,
 [  --enable-separate-stack  enable separate stack support
-   --disable-separate-stack disable separate stack support])
+  --disable-separate-stack disable separate stack support])
+
+AC_ARG_ENABLE(fiber,
+[  --enable-fiber          enable fiber support
+  --disable-fiber         disable fiber support])
 
 AC_ARG_ENABLE(megaco_flex_scanner_lineno,
 [  --enable-megaco-flex-scanner-lineno enable megaco flex scanner lineno

@@ -24,6 +24,7 @@
 #include "erl_printf_term.h"
 #include "sys.h"
 #include "big.h"
+#include "erl_binary.h"
 
 #define PRINT_CHAR(CNT, FN, ARG, C)					\
 do {									\
@@ -394,11 +395,25 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount)
 	break;
     case BINARY_DEF:
 	{
-	    ProcBin* pb = (ProcBin *) binary_val(obj);
+	    Eterm* bval = binary_val(obj);
+	    ProcBin* pb = (ProcBin *) bval;
+	    PRINT_STRING(res, fn, arg, "<<");
+	    if (*bval == HEADER_SUB_BIN) {
+		bval = binary_val(((ErlSubBin*)bval)->orig);
+		if (*bval == HEADER_SUB_BIN)
+		    PRINT_STRING(res, fn, arg, "SS:");
+		else if  (*bval == HEADER_PROC_BIN) 
+		    PRINT_STRING(res, fn, arg, "SP:");
+		else 
+		    PRINT_STRING(res, fn, arg, "SH:");
+	    }
+	    else if (*bval == HEADER_PROC_BIN) 
+		PRINT_STRING(res, fn, arg, "P:");
+	    else
+		PRINT_STRING(res, fn, arg, "H:");
 	    if (pb->size == 1)
-		PRINT_STRING(res, fn, arg, "<<1 byte>>");
+		PRINT_STRING(res, fn, arg, "1 byte>>");
 	    else {
-		PRINT_STRING(res, fn, arg, "<<");
 		PRINT_ULONG(res, fn, arg, 'u', 0, 1, (unsigned long) pb->size);
 		PRINT_STRING(res, fn, arg, " bytes>>");
 	    }

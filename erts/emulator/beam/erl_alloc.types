@@ -245,6 +245,10 @@ type	TMP_CPU_IDS	SHORT_LIVED	SYSTEM		tmp_cpu_ids
 type	EXT_TERM_DATA	SHORT_LIVED	PROCESSES	external_term_data
 type	ZLIB		STANDARD	SYSTEM		zlib
 
++if fiber
+type	FIBER		FIXED_SIZE	PROCESSES	fiber
++endif
+
 +if smp
 type	ASYNC		SHORT_LIVED	SYSTEM		async
 +else

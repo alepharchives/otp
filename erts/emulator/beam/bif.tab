@@ -759,3 +759,15 @@ bif erlang:finish_after_on_load/2
 #
 
 bif erlang:hash/2
+
+#
+# Fiber
+#
+bif fiber:create/3
+bif fiber:yield/0
+bif fiber:yield/1
+bif fiber:exit/1
+bif fiber:exit/2
+
+bif erlang:fibers/0
+bif erlang:fiber/0

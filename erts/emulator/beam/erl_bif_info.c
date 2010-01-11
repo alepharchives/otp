@@ -111,6 +111,9 @@ static char erts_system_version[] = ("Erlang " ERLANG_OTP_RELEASE
 				     " [separate-stack+]"
 #endif
 #endif
+#ifdef FIBER
+				     " [fiber]"
+#endif
 				     "\n");
 
 #define ASIZE(a) (sizeof(a)/sizeof(a[0]))
@@ -2336,6 +2339,12 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
 #endif
     } else if (ERTS_IS_ATOM_STR("separate_stack", BIF_ARG_1)) {
 #ifdef SEPARATE_STACK
+	BIF_RET(am_true);
+#else
+	BIF_RET(am_false);
+#endif
+    } else if (ERTS_IS_ATOM_STR("fiber", BIF_ARG_1)) {
+#ifdef FIBER
 	BIF_RET(am_true);
 #else
 	BIF_RET(am_false);

@@ -216,6 +216,9 @@ do {                                     \
 Eterm beam_apply[2];
 Eterm beam_exit[1];
 Eterm beam_continue_exit[1];
+#ifdef FIBER
+Eterm fiber_apply[2];
+#endif
 
 Eterm* em_call_error_handler;
 Eterm* em_apply_bif;
@@ -991,6 +994,68 @@ extern int count_instructions;
 #define IsPort(Src, Fail) if (is_not_port(Src)) { Fail; }
 #define IsPid(Src, Fail) if (is_not_pid(Src)) { Fail; }
 #define IsRef(Src, Fail) if (is_not_ref(Src)) { Fail; }
+
+#if defined(SEPARATE_STACK) && defined(FIBER)
+
+// FIXME: stack direction
+// Save n registers and CP on stack
+#define SAVE_REGS(n)					\
+    do {						\
+	int i;						\
+	int needed = (n)+1;				\
+	if (SAVAIL < needed) {				\
+	    STACK_TOP(c_p) = E;				\
+	    erts_grow_stack(c_p, needed);		\
+	    E = STACK_TOP(c_p);				\
+	}						\
+	STACK_ALLOC(E, needed);				\
+	if ((n)) {					\
+	    for (i = (n); i > 1; i--) y(i) = x(i-1);	\
+	    y(1) = r(0);				\
+	}						\
+	SAVE_CP(E);					\
+    } while(0)
+
+// Restore nn registers and CP from stack
+#define RESTORE_REGS(n)					\
+    do {						\
+        int i;						\
+	RESTORE_CP(E);					\
+	if ((n)) {					\
+	    for (i = (n); i > 1; i--) x(i-1) = y(i);	\
+	    r(0) = y(1);				\
+	}						\
+        STACK_DEALLOC(E, (n)+1);			\
+    } while(0)
+
+#define FIBER_SWAPOUT()				\
+    do {					\
+	ErlFiber* fp = c_p->fiber_hd;		\
+	fp->current = c_p->current;		\
+	fp->arity   = c_p->arity;		\
+	fp->catches = c_p->catches;		\
+	SAVE_REGS(fp->arity);			\
+	fp->s_top = E;				\
+    } while(0)
+
+#define FIBER_SWAPIN(f)							\
+    do {								\
+	ErlFiber* fp = (f);						\
+	c_p->current = fp->current;					\
+	c_p->catches = fp->catches;					\
+	if (fp != c_p->fiber_hd) {					\
+	    erl_fiber_unlink(c_p, fp);					\
+	    erl_fiber_push(c_p, fp);					\
+	}								\
+	c_p->stack     = fp->stack;					\
+	E              = fp->s_top;					\
+	c_p->s_base    = fp->stack->s_base;				\
+	c_p->s_end     = fp->stack->s_base + fp->stack->s_size;		\
+	RESTORE_REGS(fp->arity);					\
+	c_p->arity = fp->arity;						\
+    } while(0)
+
+#endif
 
 static BifFunction translate_gc_bif(void* gcf);
 static Eterm* handle_error(Process* c_p, Eterm* pc, Eterm* reg, BifFunction bf);
@@ -2083,11 +2148,15 @@ void process_main(void)
 	else if (c_p->freason == TRAP) {
 	    goto call_bif_trap3;
 	}
-
+#if defined(SEPARATE_STACK) && defined(FIBER)
+	else if (c_p->freason == SWITCH) {
+	    goto switch_fiber;
+	}
+#endif
 	/*
 	 * Error handling.  SWAPOUT is not needed because it was done above.
 	 */
-	ASSERT(STACK_TOP(c_p) == E);
+	// ASSERT(STACK_TOP(c_p) == E);
 	reg[0] = r(0);
 	I = handle_error(c_p, I, reg, bf);
 	goto post_error_handling;
@@ -2118,7 +2187,11 @@ void process_main(void)
 	} else if (c_p->freason == TRAP) {
 	    goto call_bif_trap3;
 	}
-
+#if defined(SEPARATE_STACK) && defined(FIBER)
+	else if (c_p->freason == SWITCH) {
+	    goto switch_fiber;
+	}
+#endif
 	/*
 	 * Error handling.  SWAPOUT is not needed because it was done above.
 	 */
@@ -2155,7 +2228,11 @@ void process_main(void)
 	} else if (c_p->freason == TRAP) {
 	    goto call_bif_trap3;
 	}
-
+#if defined(SEPARATE_STACK) && defined(FIBER)
+	else if (c_p->freason == SWITCH) {
+	    goto switch_fiber;
+	}
+#endif
 	/*
 	 * Error handling.  SWAPOUT is not needed because it was done above.
 	 */
@@ -2196,7 +2273,20 @@ void process_main(void)
 	    x(1) = c_p->def_arg_reg[1];
 	    x(2) = c_p->def_arg_reg[2];
 	    Dispatch();
-	}
+#if defined(SEPARATE_STACK) && defined(FIBER)
+	} else if (c_p->freason == SWITCH) {
+	switch_fiber: {
+		ErlFiber* fiber = (ErlFiber*)c_p->def_arg_reg[3];
+		SET_CP(c_p, I+2);
+		r(0) = fiber->id;
+		FIBER_SWAPOUT();
+		FIBER_SWAPIN(fiber);
+		SET_I(c_p->cp);
+		Goto(*I);
+		// Dispatch();
+	    }
+#endif
+        }
 
 	/*
 	 * Error handling.  SWAPOUT is not needed because it was done above.
@@ -2878,6 +2968,18 @@ void process_main(void)
      goto do_schedule;
  }
 
+#ifdef FIBER
+ OpCase(fiber_exit): {
+    if (!c_p->fiber_hd->next)
+	goto lb_normal_exit;
+    erl_fiber_delete(c_p, c_p->fiber_hd);
+    FIBER_SWAPIN(c_p->fiber_hd);
+    SET_I(c_p->cp);
+    Goto(*I);
+    // Dispatch();
+ }
+#endif
+
  OpCase(continue_exit): {
      ERTS_SMP_UNREQ_PROC_MAIN_LOCK(c_p);
      erts_continue_exit_process(c_p);
@@ -3076,6 +3178,15 @@ void process_main(void)
 	    x(1) = c_p->def_arg_reg[1];
 	    x(2) = c_p->def_arg_reg[2];
 	    Dispatch();
+#if defined(SEPARATE_STACK) && defined(FIBER)
+	} else if (c_p->freason == SWITCH) {
+	    ErlFiber* fiber = (ErlFiber*)c_p->def_arg_reg[3];
+	    FIBER_SWAPOUT();
+	    FIBER_SWAPIN(fiber);
+	    SET_I(c_p->cp);
+	    Goto(*I);	    
+	    // Dispatch();
+#endif
 	}
 	reg[0] = r(0);
 	I = handle_error(c_p, c_p->cp, reg, vbf);
@@ -4269,7 +4380,7 @@ void process_main(void)
 	 SWAPIN;
 	 
 	 if (flags & MATCH_SET_RX_TRACE) {
-	     // SEPARATE_STACK: FIXME
+	     // SEPARATE_STACK: FIXME update condition
 	     // ASSERT(c_p->htop <= E && E <= c_p->hend);
 	     if (SAVAIL < 3) {
 #ifdef SEPARATE_STACK
@@ -4394,7 +4505,7 @@ void process_main(void)
 	 need += 3;
      }
      if (need) {
-	 // SEPARATE_STACK: FIXME
+	 // SEPARATE_STACK: FIXME update condition
 	 // ASSERT(c_p->htop <= E && E <= c_p->hend);
 	 if (SAVAIL < need) {
 #ifdef SEPARATE_STACK
@@ -4886,6 +4997,12 @@ void process_main(void)
      em_apply_bif = OpCode(apply_bif);
      beam_apply[0] = (Eterm) OpCode(i_apply);
      beam_apply[1] = (Eterm) OpCode(normal_exit);
+#ifdef FIBER
+     fiber_apply[0] = (Eterm) OpCode(i_apply);
+     fiber_apply[1] = (Eterm) OpCode(fiber_exit);
+     // FIXME: Is this a nice way?
+     beam_apply[1] = (Eterm) OpCode(fiber_exit);
+#endif
      beam_exit[0] = (Eterm) OpCode(error_action_code);
      beam_continue_exit[0] = (Eterm) OpCode(continue_exit);
      beam_return_to_trace[0] = (Eterm) OpCode(i_return_to_trace);

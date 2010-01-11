@@ -453,6 +453,46 @@ struct ErtsPendingSuspend_ {
 // Default is same direction as stack+heap combined
 #ifdef SEPARATE_STACK
 #define STACK_DIRECTION_UP
+
+typedef struct _ErlStack {
+    Uint   s_size;           // size of stack in words
+    Eterm  s_base[0];        // dynamic stack memory
+} ErlStack;
+
+ErlStack* erl_stack_alloc(Uint size);
+ErlStack* erl_stack_realloc(ErlStack* stack, Uint size);
+void erl_stack_free(ErlStack* stack);
+
+#ifdef FIBER
+//
+// Fiber structure
+//
+
+typedef struct _ErlFiber {
+    // Stack list (when using nonpreemtive fiber extension)
+    struct _ErlFiber* next;  // next stack in list
+    struct _ErlFiber* prev;  // prev stack in list
+    Eterm* s_top;            // saved stack top
+    Eterm  id;               // stack id (fiber)
+    Sint   catches;          // saved number of catched on stack
+    Eterm  initial[3];	     // Initial module(0), function(1), arity(2)
+    Eterm* current;	     // Current Erlang function???
+    Uint   arity;            // Number of live argument registers 
+    ErlStack* stack;
+} ErlFiber;
+
+void erl_fiber_unlink(Process* p, ErlFiber* fiber);
+void erl_fiber_delete(Process* p, ErlFiber* fiber);
+void erl_fiber_delete_all(Process* p);
+void erl_fiber_enq(Process* p, ErlFiber* fiber);
+void erl_fiber_push(Process* p, ErlFiber* fiber);
+ErlFiber* erl_fiber_create(Process* p, Eterm mod, Eterm func, Eterm args);
+ErlFiber* erl_fiber_new(Process* p, Eterm id,
+			Eterm mod, Eterm func, Eterm args, 
+			size_t stack_size);
+ErlFiber* erl_fiber_find(Process* p, Eterm id);
+#endif
+
 #endif
 
 /* Defines to ease the change of memory architecture */
@@ -464,7 +504,7 @@ struct ErtsPendingSuspend_ {
 #ifdef SEPARATE_STACK
 #  define HEAP_LIMIT(p)      (p)->hend
 #  define STACK_BASE(p)      (p)->s_base
-#  define STACK_SIZE(p)      (p)->stack_sz
+#  define STACK_SIZE(p)      (p)->stack->s_size
 #ifdef STACK_DIRECTION_UP
 #  define STACK_START(p)     (p)->s_end
 #  define STACK_END(p)       (p)->s_base
@@ -682,11 +722,15 @@ struct process {
 
 #ifdef SEPARATE_STACK
     // Stack and heap are separate so we need more info
-    Eterm* s_base;              // Stack memory
-    Eterm* s_end;               // = stack + stack_sz
-    Uint   stack_sz;            // Size of stack in words
+    Eterm* s_base;              // current stack s_base
+    Eterm* s_end;               // current stack s_base + s_size
+    ErlStack* stack;            // current Stack (fiber_hd)
+#ifdef FIBER
+    ErlFiber* fiber_hd;         // First fiber
+    ErlFiber* fiber_tl;         // Last fiber
+    Uint      nfibers;          // Number of fibers
 #endif
-
+#endif
 };
 
 #ifdef CHECK_FOR_HOLES

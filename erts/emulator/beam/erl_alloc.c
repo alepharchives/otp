@@ -607,6 +607,11 @@ erts_alloc_init(int *argc, char **argv, ErtsAllocInitOpts *eaiop)
     erts_set_fix_size(ERTS_ALC_T_MONITOR_SH,	ERTS_MONITOR_SH_SIZE*sizeof(Uint));
     erts_set_fix_size(ERTS_ALC_T_NLINK_SH,	ERTS_LINK_SH_SIZE*sizeof(Uint));
     erts_set_fix_size(ERTS_ALC_T_FUN_ENTRY,	sizeof(ErlFunEntry));
+
+#ifdef FIBER
+    erts_set_fix_size(ERTS_ALC_T_FIBER,		sizeof(ErlFiber));
+#endif
+
 #ifdef ERTS_ALC_T_DRV_EV_D_STATE
     erts_set_fix_size(ERTS_ALC_T_DRV_EV_D_STATE,
 		      sizeof(ErtsDrvEventDataState));
@@ -1804,6 +1809,12 @@ erts_memory(int *print_to_p, void *print_to_arg, void *proc, Eterm earg)
 	erts_fix_info(ERTS_ALC_T_REG_PROC, &efi);
 	size.processes += efi.total;
 	size.processes_used += efi.used;
+
+#ifdef FIBER
+	erts_fix_info(ERTS_ALC_T_FIBER, &efi);
+	size.processes += efi.total;
+	size.processes_used += efi.used;
+#endif
 
     }
 
