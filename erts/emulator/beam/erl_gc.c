@@ -35,6 +35,8 @@
 #include "hipe_stack.h"
 #endif
 
+#define HARDDEBUG 1
+
 #define ERTS_INACT_WR_PB_LEAVE_MUCH_LIMIT 1
 #define ERTS_INACT_WR_PB_LEAVE_MUCH_PERCENTAGE 20
 #define ERTS_INACT_WR_PB_LEAVE_LIMIT 10
@@ -744,6 +746,7 @@ erts_garbage_collect_literals(Process* p, Eterm* literals, Uint lit_size)
 
     area = (char *) temp_lit;
     area_size = byte_lit_size;
+
     n = setup_rootset(p, p->arg_reg, p->arity, &rootset);
     roots = rootset.roots;
     old_htop = p->old_htop;
@@ -2040,14 +2043,14 @@ setup_rootset(Process *p, Eterm *objv, int nobj, Rootset *rootset)
 #ifdef FIBER
     {
 	ErlFiber* fp = p->fiber_hd;
-	if (!is_pid(fp->id))
+	if (!IS_CONST(fp->id))
 	    push_root(&fp->id, 1, n++, rootset);
 	fp = fp->next;
 	while(fp) {
 	    push_root(fp->s_top,
 		      fp->stack->s_size-(fp->s_top-fp->stack->s_base),
 		      n++,rootset);
-	    if (!is_pid(fp->id))
+	    if (!IS_CONST(fp->id))
 		push_root(&fp->id, 1, n++, rootset);
 	    fp = fp->next;
 	}
@@ -2650,7 +2653,24 @@ offset_one_rootset(Process *p, Sint offs, char* area, Uint area_size,
     offset_mqueue(p, offs, area, area_size);
     offset_heap_ptr(STACK_TOP(p), STACK_USED(p),
 		    offs, area, area_size);
+#ifdef FIBER
+    {
+	ErlFiber* fp = p->fiber_hd;
+	if (!IS_CONST(fp->id))
+	    offset_heap_ptr(&fp->id, 1, offs, area, area_size);
+	fp = fp->next;
+	while(fp) {
+	    offset_heap_ptr(fp->s_top,
+			    fp->stack->s_size-(fp->s_top-fp->stack->s_base),
+			    offs, area, area_size);
+	    if (!IS_CONST(fp->id))
+		offset_heap_ptr(&fp->id, 1, offs, area, area_size);
+	    fp = fp->next;
+	}
+    }
+#endif    
     offset_nstack(p, offs, area, area_size);
+
     if (nobj > 0) {
 	offset_heap_ptr(objv, nobj, offs, area, area_size);
     }

@@ -41,7 +41,7 @@
 #include "hipe_bif1.h"
 #endif
 
-/* #define HARDDEBUG 1 */
+// #define HARDDEBUG 1
 
 #if defined(NO_JUMP_TABLE)
 #  define OpCase(OpCode)    case op_##OpCode: lb_##OpCode
@@ -352,10 +352,6 @@ extern int count_instructions;
 #define HEND   HEAP_END(c_p)
 #define HAVAIL (HEND - HTOP)
 #define SAVAIL (E-STACK_END(c_p))
-//
-// erts_fprintf(stderr, "AH(S=%d,H=%d,M=%d,SS=%d,HS=%d)\n",
-//		   needed, HeapNeed, M, SAVAIL, HAVAIL);
-//
 
 #define AH(StackNeed, HeapNeed, M) \
     do {				    \
@@ -2276,14 +2272,13 @@ void process_main(void)
 #if defined(SEPARATE_STACK) && defined(FIBER)
 	} else if (c_p->freason == SWITCH) {
 	switch_fiber: {
-		ErlFiber* fiber = (ErlFiber*)c_p->def_arg_reg[3];
+		ErlFiber* fiber = (ErlFiber*)c_p->def_arg_reg[1];
 		SET_CP(c_p, I+2);
-		r(0) = fiber->id;
+		r(0) = c_p->def_arg_reg[0];
 		FIBER_SWAPOUT();
 		FIBER_SWAPIN(fiber);
 		SET_I(c_p->cp);
 		Goto(*I);
-		// Dispatch();
 	    }
 #endif
         }
@@ -2976,7 +2971,6 @@ void process_main(void)
     FIBER_SWAPIN(c_p->fiber_hd);
     SET_I(c_p->cp);
     Goto(*I);
-    // Dispatch();
  }
 #endif
 
@@ -3180,12 +3174,12 @@ void process_main(void)
 	    Dispatch();
 #if defined(SEPARATE_STACK) && defined(FIBER)
 	} else if (c_p->freason == SWITCH) {
-	    ErlFiber* fiber = (ErlFiber*)c_p->def_arg_reg[3];
+	    ErlFiber* fiber = (ErlFiber*)c_p->def_arg_reg[1];
+	    r(0) = c_p->def_arg_reg[0];
 	    FIBER_SWAPOUT();
 	    FIBER_SWAPIN(fiber);
 	    SET_I(c_p->cp);
-	    Goto(*I);	    
-	    // Dispatch();
+	    Goto(*I);
 #endif
 	}
 	reg[0] = r(0);

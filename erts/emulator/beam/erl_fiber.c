@@ -42,11 +42,17 @@
 // fiber:create(Mod,Fun,Args) -> ID
 BIF_RETTYPE fiber_create_3(BIF_ALIST_3)
 {
-    ErlFiber* fiber = erl_fiber_create(BIF_P, BIF_ARG_1, BIF_ARG_2, BIF_ARG_3);
-    if (!fiber)
+    ErlFiber* fiber;
+    Eterm ref;
+    Sint arity;
+
+    if (is_not_atom(BIF_ARG_1)||
+	is_not_atom(BIF_ARG_2)||((arity = list_length(BIF_ARG_3)) < 0))
 	BIF_ERROR(BIF_P, BADARG);
+    ref = erts_make_ref(BIF_P);
+    fiber = erl_fiber_create(BIF_P,ref,BIF_ARG_1, BIF_ARG_2, BIF_ARG_3);
     erl_fiber_enq(BIF_P, fiber);
-    BIF_RET(fiber->id);
+    BIF_RET(ref);
 }
 
 #define FIBER_ERROR(p,r) \
@@ -55,25 +61,26 @@ BIF_RETTYPE fiber_create_3(BIF_ALIST_3)
 	return THE_NON_VALUE; \
     } while(0)
 
-#define FIBER_SWITCH(p, f) \
+#define FIBER_SWITCH(p, f, v)				\
     do {						\
 	(p)->arity = 0;					\
-	(p)->def_arg_reg[3] = (Eterm) (f);		\
+	(p)->def_arg_reg[0] = (Eterm) (v);		\
+	(p)->def_arg_reg[1] = (Eterm) (f);		\
 	(p)->freason = SWITCH;				\
 	return THE_NON_VALUE;				\
     } while (0)
 
-// fiber:yield() run next runable fiber
+// fiber:yield() -> true
 Eterm fiber_yield_0(BIF_ALIST_0)
 {
     ErlFiber* fiber = BIF_P->fiber_hd->next;
     if (fiber) {
-	FIBER_SWITCH(BIF_P, fiber);
+	FIBER_SWITCH(BIF_P, fiber, am_true);
     }
-    return BIF_P->fiber_hd->id;
+    BIF_RET(am_true);
 }
 
-// fiber:yield(ID)  throw true
+// fiber:yield(ID) -> true
 Eterm fiber_yield_1(BIF_ALIST_1)
 {
     ErlFiber* fiber;
@@ -82,9 +89,9 @@ Eterm fiber_yield_1(BIF_ALIST_1)
     if (!(fiber = erl_fiber_find(BIF_P, BIF_ARG_1)))
 	FIBER_ERROR(BIF_P, BADARG);
     if (fiber != BIF_P->fiber_hd) {
-	FIBER_SWITCH(BIF_P, fiber);
+	FIBER_SWITCH(BIF_P, fiber, am_true);
     }
-    return BIF_P->fiber_hd->id;
+    BIF_RET(am_true);
 }
 
 // fiber:exit(Reason)
@@ -96,7 +103,7 @@ Eterm fiber_exit_1(BIF_ALIST_1)
     if (!fiber)
 	return exit_1(BIF_P,BIF_ARG_1);
     else {
-	FIBER_SWITCH(BIF_P, fiber);
+	FIBER_SWITCH(BIF_P, fiber, am_true);
     }
 }
 
@@ -114,7 +121,7 @@ Eterm fiber_exit_2(BIF_ALIST_2)
     else {
 	// should we handle Reason somehow ?
 	erl_fiber_delete(BIF_P, fiber);
-	return am_true;
+	BIF_RET(am_true);
     }
 }
 
@@ -127,7 +134,8 @@ Eterm fibers_0(BIF_ALIST_0)
     ErlFiber* fp;
 
     for (fp = BIF_P->fiber_tl; fp; fp = fp->prev) {
-	res = CONS(hp, fp->id, res);
+	Eterm id = fp->id;
+	res = CONS(hp, id, res);
 	hp += 2;
     }
     BIF_RET(res);

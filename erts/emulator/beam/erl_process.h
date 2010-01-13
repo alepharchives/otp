@@ -469,14 +469,14 @@ void erl_stack_free(ErlStack* stack);
 //
 
 typedef struct _ErlFiber {
-    // Stack list (when using nonpreemtive fiber extension)
+    // Active fiber list (when using nonpreemtive fiber extension)
     struct _ErlFiber* next;  // next stack in list
     struct _ErlFiber* prev;  // prev stack in list
     Eterm* s_top;            // saved stack top
     Eterm  id;               // stack id (fiber)
     Sint   catches;          // saved number of catched on stack
     Eterm  initial[3];	     // Initial module(0), function(1), arity(2)
-    Eterm* current;	     // Current Erlang function???
+    Eterm* current;	     // Current Erlang function
     Uint   arity;            // Number of live argument registers 
     ErlStack* stack;
 } ErlFiber;
@@ -486,10 +486,8 @@ void erl_fiber_delete(Process* p, ErlFiber* fiber);
 void erl_fiber_delete_all(Process* p);
 void erl_fiber_enq(Process* p, ErlFiber* fiber);
 void erl_fiber_push(Process* p, ErlFiber* fiber);
-ErlFiber* erl_fiber_create(Process* p, Eterm mod, Eterm func, Eterm args);
-ErlFiber* erl_fiber_new(Process* p, Eterm id,
-			Eterm mod, Eterm func, Eterm args, 
-			size_t stack_size);
+ErlFiber* erl_fiber_create(Process* p,Eterm id,Eterm mod,Eterm func,Eterm args);
+ErlFiber* erl_fiber_new(Eterm mod, Eterm func, Eterm args, size_t stack_size);
 ErlFiber* erl_fiber_find(Process* p, Eterm id);
 #endif
 

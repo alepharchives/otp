@@ -6736,8 +6736,7 @@ static void erl_fiber_push_args(ErlFiber* fiber, Eterm* icode,
     fiber->arity = 3;
 }
 
-ErlFiber* erl_fiber_new(Process* p, Eterm id, 
-			Eterm mod, Eterm func, Uint arity, size_t stack_size)
+ErlFiber* erl_fiber_new(Eterm mod, Eterm func, Uint arity, size_t stack_size)
 {
     ErlFiber* fiber;
     ErlStack* stack;
@@ -6759,7 +6758,7 @@ ErlFiber* erl_fiber_new(Process* p, Eterm id,
     fiber->initial[INITIAL_FUN] = func;
     fiber->initial[INITIAL_ARI] = arity;
     fiber->current = fiber->initial+INITIAL_MOD;
-    fiber->id = id;
+    fiber->id = NIL;
     fiber->stack = stack;
     fiber->s_top = stack->s_base + stack->s_size;
     fiber->catches = 0;
@@ -6768,17 +6767,14 @@ ErlFiber* erl_fiber_new(Process* p, Eterm id,
 }
 
 
-ErlFiber* erl_fiber_create(Process* p, Eterm mod, Eterm func, Eterm args)
+ErlFiber* erl_fiber_create(Process* p,Eterm id,Eterm mod,Eterm func,Eterm args)
 {
     ErlFiber* fiber;
-    Eterm id;
-    Sint arity;
+    Sint arity = list_length(args);
     Uint ssz =  MIN_FIBER_STACK_SIZE;
 
-    if (is_not_atom(mod)||is_not_atom(func)||((arity = list_length(args)) < 0))
-	return 0;
-    id = erts_make_ref(p);
-    fiber = erl_fiber_new(p, id, mod, func, (Uint) arity, ssz);
+    fiber = erl_fiber_new(mod, func, (Uint) arity, ssz);
+    fiber->id  = id;
     erl_fiber_push_args(fiber, fiber_apply, mod, func, args);
     return fiber;
 }
@@ -6920,7 +6916,8 @@ erl_create_process(Process* parent, /* Parent of process (default group leader).
     HEAP_END(p)  = HEAP_START(p) + sz;
 #ifdef SEPARATE_STACK
 #ifdef FIBER
-    p->fiber_hd = erl_fiber_new(p, p->id, mod, func, arity, ssz);
+    p->fiber_hd = erl_fiber_new(mod, func, arity, ssz);
+    p->fiber_hd->id = p->id;
     p->fiber_tl = p->fiber_hd;
     p->nfibers = 1;
     p->stack = p->fiber_hd->stack;
